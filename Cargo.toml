@@ -1,0 +1,47 @@
+[package]
+name = "carol"
+version = "0.1.0"
+authors = ["Gevulot Team"]
+edition = "2021"
+repository = "https://github.com/gevulotnetwork/carol"
+rust-version = "1.85"
+
+[features]
+default = []
+
+# Enables database stress-testing while running `cargo test`
+# Doesn't affect the library itself
+stresstest = []
+
+[dependencies]
+anyhow = "1"
+blake3 = { version = "1.5", features = ["serde"] }
+clap = { version = "4", features = ["derive", "string"] }
+chrono = { version = "0.4", features = ["serde"] }
+directories = "6"
+diesel = { version = "2", features = [
+    "sqlite",
+    "returning_clauses_for_sqlite_3_35",
+    "chrono",
+] }
+diesel-async = { version = "0.5", features = ["sqlite"] }
+diesel_migrations = "2"
+reqwest = { version = "0.12", features = ["rustls-tls", "stream"] }
+serde = "1"
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std"] }
+tokio-stream = "0.1"
+url = "2"
+num-traits = "0.2"
+sha256 = "1.5"
+
+[dev-dependencies]
+http-test-server = "2"
+rand = "0.9"
+tempdir = "0.3"
+tokio-cron-scheduler = { version = "0.13", features = ["signal"] }
+tokio-test = "0.4"
+tracing-test = "0.2"

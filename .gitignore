@@ -1,0 +1,6 @@
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.env
+target/
+.vscode/

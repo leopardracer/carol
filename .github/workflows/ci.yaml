@@ -1,0 +1,75 @@
+name: Checks
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "*"
+
+jobs:
+  format:
+    name: Check formatting
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          default: true
+      - name: Use Rust cache
+        uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt --check
+
+  lint:
+    name: Run linting
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          default: true
+      - name: Use Rust cache
+        uses: Swatinem/rust-cache@v2
+      - name: Run linting
+        run: cargo clippy --locked --no-deps -- --deny warnings
+
+  check-build:
+    name: Check build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          default: true
+      - name: Use Rust cache
+        uses: Swatinem/rust-cache@v2
+      - name: Run build check
+        run: cargo check --locked
+
+  run-tests:
+    name: Run tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          default: true
+      - name: Use Rust cache
+        uses: Swatinem/rust-cache@v2
+      - name: Run tests
+        run: cargo test --locked

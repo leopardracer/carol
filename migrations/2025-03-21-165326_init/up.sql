@@ -1,0 +1,11 @@
+-- Your SQL goes here
+CREATE TABLE `files`(
+	`id` INTEGER NOT NULL PRIMARY KEY,
+	`url` VARCHAR NOT NULL UNIQUE,
+	`cache_path` VARCHAR NOT NULL UNIQUE,
+	`created` TIMESTAMPTZSQLITE NOT NULL,
+	`expires` TIMESTAMPTZSQLITE,
+	`status` INTEGER NOT NULL,
+	`ref_count` INTEGER NOT NULL
+);
+
