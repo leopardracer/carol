@@ -6,9 +6,9 @@ use tokio::time;
 use tokio_stream::StreamExt;
 use tracing::{debug, error, trace, warn};
 
-use crate::database::CacheDatabase;
+use crate::database::{self, api, Connection};
 use crate::errors::{Error, NonUtf8PathError};
-use crate::models::CacheEntry;
+use crate::database::models::CacheEntry;
 use crate::{DateTime, Duration, File, FileStatus, Utc};
 
 /// Carol client.
@@ -31,9 +31,13 @@ use crate::{DateTime, Duration, File, FileStatus, Utc};
 /// and cannot be removed. Current references to the file are stored in the databse.
 /// To secure the file use [`File::lock`]/[`File::release`] methods.
 pub struct Client {
+    /// Path to cache directory.
     pub(crate) cache_dir: PathBuf,
-    pub(crate) db: CacheDatabase,
-    default_expiration: Option<Duration>,
+
+    /// Cache database connection.
+    pub(crate) db: Connection,
+
+    default_duration: Option<Duration>,
 }
 
 impl Client {
@@ -44,8 +48,10 @@ impl Client {
     where
         P: AsRef<Path>,
     {
+        trace!("running migrations on {}", database_path);
+        database::run_migrations(database_path).await?;
         trace!("establishing cache database connection: {}", database_path);
-        let db = CacheDatabase::init(database_path).await?;
+        let db = database::establish_connection(database_path).await?;
         trace!("checking cache directory: {}", cache_dir.as_ref().display());
         let meta = fs::metadata(cache_dir.as_ref()).await?;
         if !meta.is_dir() {
@@ -56,17 +62,17 @@ impl Client {
         Ok(Self {
             cache_dir: cache_dir.as_ref().to_path_buf(),
             db,
-            default_expiration: None,
+            default_duration: None,
         })
     }
 
-    /// Set default expiration period for downloaded files.
+    /// Set default duration for downloaded files.
     ///
-    /// `period` will be added to [`Utc::now()`] and set
+    /// `duration` will be added to [`Utc::now()`] and set
     /// as an expiration timestamp for all downloaded files.
-    /// If not set, files will never expire.
-    pub fn set_default_expiration(&mut self, period: Duration) {
-        self.default_expiration = Some(period);
+    /// If not set, files won't have any expiration timestamp and will never expire.
+    pub fn set_default_duration(&mut self, duration: Duration) {
+        self.default_duration = Some(duration);
     }
 
     /// Download the file from URL into cache.
@@ -81,14 +87,13 @@ impl Client {
         let url_hash = sha256::digest(url);
         let cache_path = self.cache_dir.join(&url_hash);
 
-        let result = self
-            .db
-            .new_entry(
-                url.as_ref(),
-                cache_path.to_str().ok_or(NonUtf8PathError)?,
-                self.default_expiration.map(|period| Utc::now() + period),
-            )
-            .await;
+        let result = api::new_entry(
+            &mut self.db,
+            url.as_ref(),
+            cache_path.to_str().ok_or(NonUtf8PathError)?,
+            self.default_duration.map(|period| Utc::now() + period),
+        )
+        .await;
 
         match result {
             Ok(entry) => {
@@ -110,8 +115,7 @@ impl Client {
     where
         T: AsRef<str>,
     {
-        self.db
-            .get_by_url(url.as_ref())
+        api::get_by_url(&mut self.db, url.as_ref())
             .await
             .map(|res| res.map(Into::into))
             .map_err(Into::into)
@@ -125,7 +129,7 @@ impl Client {
         T: AsRef<str>,
     {
         if let Some(file) = self.find(url).await? {
-            self.db.update_expires(file.id, Some(expires_at)).await?;
+            api::update_expires(&mut self.db, file.id, Some(expires_at)).await?;
             Ok(())
         } else {
             Err(Error::CustomError("URL is not cached".to_string()))
@@ -150,7 +154,7 @@ impl Client {
 
             // If this fails, the file will still be marked as `ToRemove`,
             // so it will be garbage collected later.
-            self.db.remove_entry(file.id).await?;
+            api::remove_entry(&mut self.db, file.id).await?;
 
             // If this fails, we will have a dangling file in cache directory,
             // which will be removed later on maintenance.
@@ -167,7 +171,7 @@ impl Client {
         T: AsRef<str>,
     {
         if let Some(file) = self.find(url).await? {
-            self.db.update_status(file.id, FileStatus::ToRemove).await?;
+            api::update_status(&mut self.db, file.id, FileStatus::ToRemove).await?;
         }
         Ok(())
     }
@@ -187,7 +191,7 @@ impl Client {
     {
         if let Some(file) = self.find(url).await? {
             // Since this is unsafe method, calling it may lead to invalid cache state
-            self.db.delete_unsafe(file.id).await?;
+            api::delete_unsafe(&mut self.db, file.id).await?;
             fs::remove_file(&file.cache_path).await?;
         }
         Ok(())
@@ -195,8 +199,7 @@ impl Client {
 
     /// List all cache entries.
     pub async fn list(&mut self) -> Result<Vec<File>, Error> {
-        self.db
-            .get_all()
+        api::get_all(&mut self.db)
             .await
             .map(|res| res.into_iter().map(Into::into).collect())
             .map_err(Into::into)
@@ -223,7 +226,8 @@ impl Client {
                 let chunk = chunk_result?;
                 file.write_all(&chunk).await?;
             }
-            let updated_entry = self.db.update_status(entry.id, FileStatus::Ready).await?;
+            let updated_entry =
+                api::update_status(&mut self.db, entry.id, FileStatus::Ready).await?;
             debug!("updating entry status: {:?}", updated_entry);
             Ok(updated_entry)
         };
@@ -233,9 +237,7 @@ impl Client {
             Err(err) => {
                 // cleanup before returning
                 // just log error because we already have main error to return
-                let failed_to_update = self
-                    .db
-                    .update_status(entry.id, FileStatus::Corrupted)
+                let failed_to_update = api::update_status(&mut self.db, entry.id, FileStatus::Corrupted)
                     .await
                     .map_err(|err| warn!("failed to mark file, which was not downloaded successfully, as corrupted: {}", err))
                     .is_err();
@@ -250,9 +252,7 @@ impl Client {
                     })
                     .is_err();
 
-                let failed_to_remove_entry = self
-                    .db
-                    .remove_entry(entry.id)
+                let failed_to_remove_entry = api::remove_entry(&mut self.db, entry.id)
                     .await
                     .map_err(|err| {
                         warn!(
@@ -286,7 +286,7 @@ impl Client {
     async fn wait_entry(&mut self, url: &str) -> Result<CacheEntry, Error> {
         debug!("awaiting URL: {}", url);
         loop {
-            if let Some(entry) = self.db.get_by_url(url).await? {
+            if let Some(entry) = api::get_by_url(&mut self.db, url).await? {
                 if entry.status == FileStatus::Ready {
                     return Ok(entry);
                 } else {
@@ -311,7 +311,7 @@ impl Client {
     async fn wait_file_free(&mut self, file: &File) -> Result<(), Error> {
         debug!("waiting file to become free: {:?}", file);
         loop {
-            let entry = self.db.get_entry(file.id).await?;
+            let entry = api::get_entry(&mut self.db, file.id).await?;
             if entry.ref_count == 0 {
                 break;
             } else {
@@ -324,3 +324,148 @@ impl Client {
 }
 
 // TODO: probably we need some timeouts for downloading/awaiting
+
+/// Client fixtures. Helps in testing client-related code.
+#[cfg(test)]
+pub(crate) mod fixtures {
+    use crate::database::fixtures::CacheDatabaseFixture;
+    use crate::Client;
+    use http_test_server::http::{Method, Status};
+    use http_test_server::TestServer;
+    use std::path::PathBuf;
+    use tempdir::TempDir;
+
+    type Error = Box<dyn std::error::Error>;
+
+    /// Just keeps temp web server running and stops on drop.
+    /// Returns also host string e.g. `http://localhost:8080`.
+    pub fn setup_test_server() -> Result<(TestServer, String), Error> {
+        let server = TestServer::new()?;
+        let resource = server.create_resource("/file.txt");
+        resource
+            .status(Status::OK)
+            .method(Method::GET)
+            .header("Content-Type", "text/plain")
+            .body("This is test file.");
+        let port = server.port();
+        let host = format!("http://localhost:{}", port);
+        Ok((server, host))
+    }
+
+    pub struct ClientFixture {
+        /// Holds test web server running and destroys it on drop.
+        #[allow(dead_code)]
+        web_server: Option<TestServer>,
+
+        /// Host string like `http://localhost:8080`.
+        pub host: String,
+
+        /// Client with temp database and cache directory.
+        pub client: Client,
+
+        /// Hold cache directory and destroys it on drop.
+        #[allow(dead_code)]
+        tmp: TempDir,
+
+        /// Path to cache directory.
+        pub cache_dir: PathBuf,
+
+        /// Database fixture.
+        pub db: CacheDatabaseFixture,
+    }
+
+    impl ClientFixture {
+        /// Create new client with empty cache.
+        pub async fn new() -> Result<Self, Error> {
+            let (web_server, host) = setup_test_server()?;
+            let db = CacheDatabaseFixture::new().await?;
+            let tmp = TempDir::new("carol.test.files").unwrap();
+            let cache_dir = tmp.path().to_path_buf();
+            let client = Client::init(&db.db_path, &cache_dir).await?;
+            Ok(Self {
+                web_server: Some(web_server),
+                host,
+                client,
+                db,
+                tmp,
+                cache_dir,
+            })
+        }
+
+        pub fn drop_web_server(&mut self) {
+            self.web_server = None;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fixtures::ClientFixture;
+    use super::*;
+    use tempdir::TempDir;
+    use tokio::fs;
+    use tracing_test::traced_test;
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_init_new_cache() {
+        let tmp_database = TempDir::new("carol.test.database").unwrap();
+        let database = tmp_database.path().join("carol.sqlite");
+        let database_path = database.as_os_str().to_str().unwrap().to_string();
+
+        let tmp_cache_dir = TempDir::new("carol.test.database").unwrap();
+
+        Client::init(&database_path, tmp_cache_dir.path())
+            .await
+            .expect("initialize new cache");
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_connect_to_existing_cache() {
+        let fixture = ClientFixture::new().await.unwrap();
+
+        Client::init(&fixture.db.db_path, &fixture.cache_dir)
+            .await
+            .expect("connect to existing cache");
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_get() {
+        let fixture = ClientFixture::new().await.unwrap();
+        let mut client = fixture.client;
+        let url = format!("{}/file.txt", &fixture.host);
+        let file = client.get(&url).await.expect("get file from URL");
+        assert_eq!(file.status, FileStatus::Ready);
+        assert_eq!(file.url, url);
+        let content = fs::read_to_string(&file.cache_path)
+            .await
+            .expect("read downloaded file");
+        assert_eq!(content, "This is test file.");
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_get_not_re_downloading() {
+        let mut fixture = ClientFixture::new().await.unwrap();
+        let client = &mut fixture.client;
+
+        let url = format!("{}/file.txt", &fixture.host);
+        let first_file = client
+            .get(&url)
+            .await
+            .expect("get file from URL first time");
+
+        // drop server to ensure next time nothing will be downloaded
+        fixture.drop_web_server();
+        assert!(reqwest::get(&url).await.is_err());
+
+        let client = &mut fixture.client;
+        let second_file = client
+            .get(&url)
+            .await
+            .expect("get file from URL second time");
+        assert_eq!(first_file.id, second_file.id);
+    }
+}

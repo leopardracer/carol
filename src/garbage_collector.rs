@@ -1,6 +1,7 @@
 use chrono::Utc;
 use tracing::{error, info, warn};
 
+use crate::database::api;
 use crate::errors::Error;
 use crate::{Client, Duration, FileStatus};
 
@@ -54,11 +55,7 @@ impl<'c> GarbageCollector<'c> {
 
     /// Remove files with status `ToRemove`.
     pub async fn remove(&mut self) -> Result<(), Error> {
-        let to_remove = self
-            .client
-            .db
-            .filter_by_status(FileStatus::ToRemove)
-            .await?;
+        let to_remove = api::filter_by_status(&mut self.client.db, FileStatus::ToRemove).await?;
         for entry in to_remove {
             match self.client.remove(&entry.url).await {
                 Ok(_) => {

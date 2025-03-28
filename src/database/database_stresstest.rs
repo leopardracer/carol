@@ -3,19 +3,18 @@
 //! This test is pretty heavy, so it is hidden behind `stresstest` feature.
 //! It is not going to be run by default.
 
-use crate::database::CacheDatabase;
+use crate::database::{self, api, Connection};
 use crate::errors::DatabaseError;
 use crate::FileStatus;
+use std::sync::Arc;
 use tempdir::TempDir;
+use tokio::sync::RwLock;
+use tokio::task::JoinSet;
 use tracing_test::traced_test;
 
 #[tokio::test]
 #[traced_test]
 async fn test_cache_database_stress_testing() {
-    use std::sync::Arc;
-    use tokio::sync::RwLock;
-    use tokio::task::JoinSet;
-
     // This test will run a bunch of random operations
     // on the database from multiple clients at the same time.
     // The goal is to make sure we will get no unexpected errors.
@@ -30,6 +29,10 @@ async fn test_cache_database_stress_testing() {
     let tmp = TempDir::new("carol.test").unwrap();
     let db_path = tmp.path().join("carol.sqlite");
 
+    database::run_migrations(db_path.as_os_str().to_str().unwrap())
+        .await
+        .expect(&format!("run migrations on database"));
+
     // primary keys collection shared accross all workers
     let pks = Arc::new(RwLock::new(Vec::new()));
 
@@ -39,7 +42,7 @@ async fn test_cache_database_stress_testing() {
     // Asyncronous initlization often fails with "database is locked"
     let mut tasks = JoinSet::new();
     for i in 0..N {
-        let db = CacheDatabase::init(db_path.as_os_str().to_str().unwrap())
+        let db = database::establish_connection(db_path.as_os_str().to_str().unwrap())
             .await
             .expect(&format!("init database {}", i));
         tasks.spawn(inner(db, pks.clone(), unknown_errors.clone()));
@@ -48,7 +51,7 @@ async fn test_cache_database_stress_testing() {
     // this function will create a new db client
     // and spam random db operations
     async fn inner(
-        mut db: CacheDatabase,
+        mut db: Connection,
         pks: Arc<RwLock<Vec<i32>>>,
         unknown_errors: Arc<RwLock<u64>>,
     ) {
@@ -106,7 +109,7 @@ async fn test_cache_database_stress_testing() {
 
             match action {
                 1 => {
-                    match db.new_entry(&url, &cache_path, None).await {
+                    match api::new_entry(&mut db, &url, &cache_path, None).await {
                         Ok(entry) => {
                             pks.write().await.push(entry.id);
                         }
@@ -120,49 +123,59 @@ async fn test_cache_database_stress_testing() {
                 }
                 2 => {
                     if let Some(pk) = pk {
-                        let _ = db.get_entry(pk).await.map_err(allow_some_errors);
+                        let _ = api::get_entry(&mut db, pk).await.map_err(allow_some_errors);
                     }
                 }
                 3 => {
                     if let Some(pk) = pk {
-                        let _ = db.remove_entry(pk).await.map_err(async |err| match err {
-                            DatabaseError::DieselError(diesel::result::Error::NotFound) => err,
-                            DatabaseError::RemoveError(..) => err,
-                            _ => allow_some_errors(err).await,
-                        });
+                        let _ =
+                            api::remove_entry(&mut db, pk)
+                                .await
+                                .map_err(async |err| match err {
+                                    DatabaseError::DieselError(diesel::result::Error::NotFound) => {
+                                        err
+                                    }
+                                    DatabaseError::RemoveError(..) => err,
+                                    _ => allow_some_errors(err).await,
+                                });
                         pks.write().await.retain(|&i| i != pk);
                     }
                 }
                 4 => {
                     if let Some(pk) = pk {
-                        let _ = unsafe { db.delete_unsafe(pk) }
+                        let _ = unsafe { api::delete_unsafe(&mut db, pk) }
                             .await
                             .map_err(allow_some_errors);
                         pks.write().await.retain(|&i| i != pk);
                     }
                 }
                 5 => {
-                    db.get_all().await.expect("get_all never fails");
+                    api::get_all(&mut db).await.expect("get_all never fails");
                 }
                 6 => {
-                    let _ = db.get_by_url(&url).await.expect("get_by_url never fails");
+                    let _ = api::get_by_url(&mut db, &url)
+                        .await
+                        .expect("get_by_url never fails");
                 }
                 7 => {
                     if let Some(pk) = pk {
-                        let _ = db
-                            .update_status(pk, FileStatus::ToRemove)
+                        let _ = api::update_status(&mut db, pk, FileStatus::ToRemove)
                             .await
                             .map_err(allow_some_errors);
                     }
                 }
                 8 => {
                     if let Some(pk) = pk {
-                        let _ = db.increment_ref(pk).await.map_err(allow_some_errors);
+                        let _ = api::increment_ref(&mut db, pk)
+                            .await
+                            .map_err(allow_some_errors);
                     }
                 }
                 9 => {
                     if let Some(pk) = pk {
-                        let _ = db.increment_ref(pk).await.map_err(allow_some_errors);
+                        let _ = api::increment_ref(&mut db, pk)
+                            .await
+                            .map_err(allow_some_errors);
                     }
                 }
                 _ => unreachable!(),

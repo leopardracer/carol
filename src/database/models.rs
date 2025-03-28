@@ -1,9 +1,9 @@
-use crate::schema::FileStatus;
+use crate::database::schema::FileStatus;
 use chrono::{DateTime, Utc};
 use diesel::{Insertable, Queryable, Selectable};
 
 #[derive(Queryable, Selectable)]
-#[diesel(table_name = crate::schema::files)]
+#[diesel(table_name = crate::database::schema::files)]
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CacheEntry {
@@ -17,7 +17,7 @@ pub struct CacheEntry {
 }
 
 #[derive(Insertable)]
-#[diesel(table_name = crate::schema::files)]
+#[diesel(table_name = crate::database::schema::files)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewCacheEntry {
     pub url: String,

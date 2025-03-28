@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use tokio::fs;
 
+use crate::database::api;
+use crate::database::models::CacheEntry;
 use crate::errors::Error;
-use crate::models::CacheEntry;
 use crate::{Client, FileStatus};
 
 /// Cached file.
@@ -68,13 +69,13 @@ impl File {
     /// Increment files reference counter.
     /// When reference counter is > 0, the file will not be removed.
     pub async fn lock(&self, client: &mut Client) -> Result<(), Error> {
-        client.db.increment_ref(self.id).await?;
+        api::increment_ref(&mut client.db, self.id).await?;
         Ok(())
     }
 
     /// Decrement files reference counter.
     pub async fn release(&self, client: &mut Client) -> Result<(), Error> {
-        client.db.decrement_ref(self.id).await?;
+        api::decrement_ref(&mut client.db, self.id).await?;
         Ok(())
     }
 }

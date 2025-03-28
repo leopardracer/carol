@@ -5,10 +5,11 @@ use diesel::result::DatabaseErrorKind;
 #[doc(no_inline)]
 pub use diesel::result::{ConnectionError, Error as DieselError};
 
+/// Cache database related errors.
 #[derive(thiserror::Error, Debug)]
 pub enum DatabaseError {
     #[error("database connection failed: {0}")]
-    ConnectionError(ConnectionError),
+    ConnectionError(#[from] ConnectionError),
 
     #[error("database migration failed: {0}")]
     MigrationError(String),
@@ -17,11 +18,12 @@ pub enum DatabaseError {
     DieselError(#[from] DieselError),
 
     #[error("failed to remove entry: {0}")]
-    RemoveError(RemoveError),
+    RemoveError(RemoveErrorReason),
 }
 
+/// Reason why remove failed.
 #[derive(thiserror::Error, Debug)]
-pub enum RemoveError {
+pub enum RemoveErrorReason {
     #[error("reference counter is not 0")]
     UsedFile,
 
@@ -42,7 +44,7 @@ impl DatabaseError {
     }
 }
 
-/// Carol error.
+/// Carol client error.
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("{0}")]

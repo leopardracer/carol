@@ -1,6 +1,7 @@
 use tokio::fs::{self, DirEntry};
 use tracing::{debug, error, info, warn};
 
+use crate::database::api;
 use crate::errors::{Error, MaintenanceError, NonUtf8PathError};
 use crate::{Client, File, FileStatus, GarbageCollector};
 
@@ -78,10 +79,7 @@ impl<'c> MaintenanceRunner<'c> {
     /// If running [`Self::find_corrupted_cache_entries`], this function should be called after.
     pub async fn remove_corrupted_entries(&mut self) -> Result<(), MaintenanceError> {
         info!("removing corrupted entries");
-        let corrupted = self
-            .client
-            .db
-            .filter_by_status(FileStatus::Corrupted)
+        let corrupted = api::filter_by_status(&mut self.client.db, FileStatus::Corrupted)
             .await
             .map_err(Error::from)?;
         info!("corrupted entries: {}", corrupted.len());
@@ -128,9 +126,7 @@ impl<'c> MaintenanceRunner<'c> {
     /// - checking that `file.cache_path` exists
     async fn check_file(&mut self, file: &File) -> Result<(), MaintenanceError> {
         if !file.cache_path.exists() {
-            self.client
-                .db
-                .update_status(file.id, FileStatus::Corrupted)
+            api::update_status(&mut self.client.db, file.id, FileStatus::Corrupted)
                 .await
                 .map_err(Error::from)?;
         }
@@ -150,13 +146,13 @@ impl<'c> MaintenanceRunner<'c> {
             return Ok(());
         }
 
-        if self
-            .client
-            .db
-            .get_by_cache_path(path.as_os_str().to_str().ok_or(NonUtf8PathError)?)
-            .await
-            .map_err(Error::from)?
-            .is_none()
+        if api::get_by_cache_path(
+            &mut self.client.db,
+            path.as_os_str().to_str().ok_or(NonUtf8PathError)?,
+        )
+        .await
+        .map_err(Error::from)?
+        .is_none()
         {
             info!(
                 "file '{}' is not found in database - removing it",

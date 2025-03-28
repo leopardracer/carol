@@ -30,8 +30,6 @@ mod database;
 mod file;
 mod garbage_collector;
 mod maintenance;
-mod models;
-mod schema;
 
 pub mod errors;
 
@@ -39,13 +37,10 @@ pub use client::Client;
 pub use file::File;
 pub use garbage_collector::GarbageCollector;
 pub use maintenance::MaintenanceRunner;
-pub use schema::FileStatus;
+pub use database::schema::FileStatus;
 
 // Re-exports of public API arguments from extern crates
 #[doc(no_inline)]
 pub use chrono::{DateTime, Utc};
 #[doc(no_inline)]
 pub use tokio::time::Duration;
-
-#[cfg(test)]
-mod tests;

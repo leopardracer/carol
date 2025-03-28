@@ -37,13 +37,25 @@ diesel::table! {
     }
 }
 
+/// Status of cached file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, FromSqlRow, AsExpression)]
 #[diesel(sql_type = Integer)]
 #[repr(i32)]
 pub enum FileStatus {
+    /// File is probably still downloading. Client which queries this file
+    /// should wait for it to become `Ready`.
     Pending = 0,
+
+    /// File is ready to be used.
     Ready = 1,
+
+    /// File is scheduled for removal. Client which queries this file
+    /// should not pick it up.
     ToRemove = 2,
+
+    /// File is corrupted. This means that something is wrong with the file
+    /// or the cache entry. Client which queries this file should not pick this up.
+    /// Corrupted files should be cheduled for removal at some point.
     Corrupted = 3,
 }
 
