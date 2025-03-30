@@ -68,7 +68,7 @@ impl<'c> MaintenanceRunner<'c> {
         let files = self.client.list().await?;
         for file in files {
             if let Err(err) = self.check_file(&file).await {
-                error!("failed to check file (URL '{}'): {}", &file.url, err);
+                error!("failed to check file (URL '{}'): {}", file.url(), err);
             }
         }
         Ok(())
@@ -125,7 +125,7 @@ impl<'c> MaintenanceRunner<'c> {
     /// This includes:
     /// - checking that `file.cache_path` exists
     async fn check_file(&mut self, file: &File) -> Result<(), MaintenanceError> {
-        if !file.cache_path.exists() {
+        if !file.cache_path().exists() {
             api::update_status(&mut self.client.db, file.id, FileStatus::Corrupted)
                 .await
                 .map_err(Error::from)?;

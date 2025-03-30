@@ -6,9 +6,9 @@ use tokio::time;
 use tokio_stream::StreamExt;
 use tracing::{debug, error, trace, warn};
 
+use crate::database::models::CacheEntry;
 use crate::database::{self, api, Connection};
 use crate::errors::{Error, NonUtf8PathError};
-use crate::database::models::CacheEntry;
 use crate::{DateTime, Duration, File, FileStatus, Utc};
 
 /// Carol client.
@@ -29,7 +29,7 @@ use crate::{DateTime, Duration, File, FileStatus, Utc};
 ///
 /// Carol uses reference counter approach to track which files are "used" at the moment
 /// and cannot be removed. Current references to the file are stored in the databse.
-/// To secure the file use [`File::lock`]/[`File::release`] methods.
+/// Each alive [`File`] variable is treated as a reference and this reference is removed on drop.
 pub struct Client {
     /// Path to cache directory.
     pub(crate) cache_dir: PathBuf,
@@ -37,11 +37,13 @@ pub struct Client {
     /// Cache database connection.
     pub(crate) db: Connection,
 
+    database_url: String,
+
     default_duration: Option<Duration>,
 }
 
 impl Client {
-    /// Initialize client.
+    /// Initialize Carol client.
     ///
     /// Initializes database if it doesn't exist.
     pub async fn init<P>(database_path: &str, cache_dir: P) -> Result<Self, Error>
@@ -62,6 +64,7 @@ impl Client {
         Ok(Self {
             cache_dir: cache_dir.as_ref().to_path_buf(),
             db,
+            database_url: database_path.to_string(),
             default_duration: None,
         })
     }
@@ -73,6 +76,11 @@ impl Client {
     /// If not set, files won't have any expiration timestamp and will never expire.
     pub fn set_default_duration(&mut self, duration: Duration) {
         self.default_duration = Some(duration);
+    }
+
+    /// Append database URL to cache entry.
+    fn to_file(&self, entry: CacheEntry) -> File {
+        File::from_entry(entry, self.database_url.clone())
     }
 
     /// Download the file from URL into cache.
@@ -89,7 +97,7 @@ impl Client {
 
         let result = api::new_entry(
             &mut self.db,
-            url.as_ref(),
+            url,
             cache_path.to_str().ok_or(NonUtf8PathError)?,
             self.default_duration.map(|period| Utc::now() + period),
         )
@@ -99,12 +107,27 @@ impl Client {
             Ok(entry) => {
                 // File was not in cache, so let's download it
                 debug!("cache miss: {:?}", entry);
-                self.fetch_entry(&entry).await.map(Into::into)
+                let mut file = self
+                    .fetch_entry(&entry)
+                    .await
+                    .map(|entry| self.to_file(entry))?;
+                // At this point file was downloaded and stored in cache
+                // If this function fails, it means that we only failed
+                // to increment the reference counter. So it is safe
+                // to just return an error here and let user call `get()` again.
+                file.lock().await?;
+                Ok(file)
             }
             Err(err) if err.is_unique_violation() => {
                 // File is already in cache
                 debug!("cache hit: {}", url);
-                self.wait_entry(url).await.map(Into::into)
+                let mut file = self
+                    .wait_entry(url)
+                    .await
+                    .map(|entry| self.to_file(entry))?;
+                // See comment above about the error in reference counter increment.
+                file.lock().await?;
+                Ok(file)
             }
             Err(err) => Err(err.into()),
         }
@@ -117,7 +140,7 @@ impl Client {
     {
         api::get_by_url(&mut self.db, url.as_ref())
             .await
-            .map(|res| res.map(Into::into))
+            .map(|res| res.map(|entry| self.to_file(entry)))
             .map_err(Into::into)
     }
 
@@ -158,7 +181,7 @@ impl Client {
 
             // If this fails, we will have a dangling file in cache directory,
             // which will be removed later on maintenance.
-            fs::remove_file(&file.cache_path).await?;
+            fs::remove_file(file.cache_path()).await?;
         }
         Ok(())
     }
@@ -192,7 +215,7 @@ impl Client {
         if let Some(file) = self.find(url).await? {
             // Since this is unsafe method, calling it may lead to invalid cache state
             api::delete_unsafe(&mut self.db, file.id).await?;
-            fs::remove_file(&file.cache_path).await?;
+            fs::remove_file(file.cache_path()).await?;
         }
         Ok(())
     }
@@ -201,7 +224,7 @@ impl Client {
     pub async fn list(&mut self) -> Result<Vec<File>, Error> {
         api::get_all(&mut self.db)
             .await
-            .map(|res| res.into_iter().map(Into::into).collect())
+            .map(|res| res.into_iter().map(|entry| self.to_file(entry)).collect())
             .map_err(Into::into)
     }
 
@@ -312,6 +335,7 @@ impl Client {
         debug!("waiting file to become free: {:?}", file);
         loop {
             let entry = api::get_entry(&mut self.db, file.id).await?;
+            trace!("ref count = {}", entry.ref_count);
             if entry.ref_count == 0 {
                 break;
             } else {
@@ -437,9 +461,12 @@ mod tests {
         let mut client = fixture.client;
         let url = format!("{}/file.txt", &fixture.host);
         let file = client.get(&url).await.expect("get file from URL");
-        assert_eq!(file.status, FileStatus::Ready);
-        assert_eq!(file.url, url);
-        let content = fs::read_to_string(&file.cache_path)
+        assert_eq!(
+            file.status().await.expect("get file status"),
+            FileStatus::Ready
+        );
+        assert_eq!(file.url(), url);
+        let content = fs::read_to_string(file.cache_path())
             .await
             .expect("read downloaded file");
         assert_eq!(content, "This is test file.");

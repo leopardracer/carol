@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 use tempdir::TempDir;
 use tokio::fs;
 
-use carol::{errors::Error, Client};
+use carol::{Client, File};
 
 #[tokio::test]
 async fn test_client() -> anyhow::Result<()> {
@@ -18,13 +18,16 @@ async fn test_client() -> anyhow::Result<()> {
     let mut client = Client::init(&db_path_str, &cache_dir).await?;
 
     let source_url = "https://example.com";
-    let target = PathBuf::from("example.html");
 
+    // This variable will keep a reference to source URL, preventing it from removal.
     let file = client.get(source_url).await?;
-    file.lock(&mut client).await?;
 
-    // Wrap all the work into closure to ensure we unlock file at the end.
-    let job = async || -> Result<(), Error> {
+    // We will use this function to own the file and drop it at the end.
+    // After calling this function, file will be released and can be removed by client.
+    // Instead of that you can call file.release() or drop(file) manually.
+    async fn use_file(file: File) -> anyhow::Result<()> {
+        let target = PathBuf::from("example.html");
+
         file.symlink(&target).await?;
 
         Command::new("cat")
@@ -33,13 +36,14 @@ async fn test_client() -> anyhow::Result<()> {
             .status()?;
 
         fs::remove_file(&target).await?;
-
         Ok(())
-    };
+    }
 
-    let result = job().await;
-    file.release(&mut client).await?;
-    result?;
+    use_file(file).await?;
+
+    // Now because file using this URL was dropped, URL can be removed from cache.
+    // If the file wasn't drop, this function will be stuck waiting for file to be release.
+    client.remove(source_url).await?;
 
     Ok(())
 }

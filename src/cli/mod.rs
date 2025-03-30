@@ -122,7 +122,7 @@ impl Command {
                     file.symlink(target).await?;
                     target.clone()
                 } else {
-                    file.cache_path
+                    file.cache_path().to_path_buf()
                 };
                 println!("{}", output_path.display());
             }

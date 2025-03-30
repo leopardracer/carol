@@ -8,8 +8,8 @@ use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use tracing::trace;
 
-use crate::errors::{DatabaseError, RemoveErrorReason};
 use crate::database::models::{CacheEntry, NewCacheEntry};
+use crate::errors::{DatabaseError, RemoveErrorReason};
 use crate::FileStatus;
 
 use super::{Connection, DatabaseResult};

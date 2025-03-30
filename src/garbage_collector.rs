@@ -31,21 +31,26 @@ impl<'c> GarbageCollector<'c> {
         let now = Utc::now();
         let files = self.client.list().await?; // FIXME: any iterators in diesel?
 
-        let to_remove = files
-            .iter()
-            .filter(|file| file.expires.is_some_and(|ts| ts < now))
-            .collect::<Vec<_>>();
+        let mut to_remove = vec![];
+        for file in files.into_iter() {
+            if let Some(ts) = file.expires().await? {
+                if ts < now {
+                    to_remove.push(file);
+                }
+            }
+        }
         info!("expired files: {}", to_remove.len());
 
         for file in to_remove {
-            match self.client.schedule_for_removal(&file.url).await {
+            match self.client.schedule_for_removal(file.url()).await {
                 Ok(_) => {
-                    info!("URL '{}' scheduled for removal", &file.url);
+                    info!("URL '{}' scheduled for removal", file.url());
                 }
                 Err(err) => {
                     warn!(
                         "failed to schedule URL '{}' for removal: {}",
-                        &file.url, err
+                        file.url(),
+                        err
                     );
                 }
             }

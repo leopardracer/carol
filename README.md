@@ -8,6 +8,8 @@ Library to download from HTTP(-S) servers and caching the results.
 // Fetch a single file
 let mut client = carol::Client::init("carol.sqlite", ".cache").await?;
 let file = client.get("https://example.com").await?;
+drop(file);
+client.remove("https://example.com").await?;
 ```
 
 ## CLI example
@@ -25,3 +27,12 @@ $ cat example
 $ readlink example 
 /home/user/.cache/carol/files/100680ad546ce6a577f42f52df33b4cfdca756859e664b8d7de329b150d09ce9
 ```
+
+## Roadmap
+
+- [ ] Retry policies for client and maintainers
+- [ ] Timeouts for different operations
+- [ ] Add more scenarios to integration tests
+- [ ] Client configuration options (possibly ClientBuilder)
+- [ ] Update (re-download) file feature
+- [ ] Refine logging
