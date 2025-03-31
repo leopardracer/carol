@@ -1,15 +1,42 @@
 # Cache Roller (CAROL)
 
-Library to download from HTTP(-S) servers and caching the results.
+Asyncronous caching engine for fetching files over HTTP(-S).
+Designed to avoid copying huge files. This is **not** a HTTP proxy.
 
-## Usage example
+The main idea of Carol is to store downloaded files in the filesystem,
+tracking and managing their state through cache database.
+
+Repository contains `carol` Rust library and `carol` CLI tool.
+
+Find out more from docs:
+
+```shell
+cargo doc --open
+```
+
+## API example
 
 ```rust
-// Fetch a single file
-let mut client = carol::Client::init("carol.sqlite", ".cache").await?;
-let file = client.get("https://example.com").await?;
+use carol::Client;
+
+// Initialize client
+let mut client = Client::init(database, cache_dir).await.unwrap();
+
+// Download file or just get it if it's already downloaded
+let file = client.get(url).await.unwrap();
+
+// You can access downloaded file directly from cache directory
+let full_path = file.cache_path();
+
+// Alternatively create symlink to downloaded file,
+// so it can be accessed at a different path
+file.symlink(target).await.unwrap();
+
+// use file however you need
+// ...
+
+// "Free" file so it can be removed from cache later
 drop(file);
-client.remove("https://example.com").await?;
 ```
 
 ## CLI example
@@ -36,3 +63,4 @@ $ readlink example
 - [ ] Client configuration options (possibly ClientBuilder)
 - [ ] Update (re-download) file feature
 - [ ] Refine logging
+- [ ] Add "Last used" timestamp to file meta

@@ -24,9 +24,11 @@ pub enum DatabaseError {
 /// Reason why remove failed.
 #[derive(thiserror::Error, Debug)]
 pub enum RemoveErrorReason {
+    /// Reference counter is not 0
     #[error("reference counter is not 0")]
     UsedFile,
 
+    /// Entry status is not 'ToRemove'
     #[error("entry status is not 'ToRemove'")]
     WrongStatus,
 }
@@ -47,18 +49,27 @@ impl DatabaseError {
 /// Carol client error.
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+    /// Cache database releated error
     #[error("database error")]
     DatabaseError(#[from] DatabaseError),
 
+    /// Some I/O operation failed
     #[error("I/O error")]
     IoError(#[from] std::io::Error),
 
+    /// Error during downloading of the file
     #[error("download error")]
     DownloadError(#[from] reqwest::Error),
 
+    /// Failed to wait for file to be downloaded
+    ///
+    /// This happens when one thread is waiting for
+    /// a file, which is currently being downloaded by another thread,
+    /// and that download fails.
     #[error("awaited file failed to download")]
     AwaitingError,
 
+    /// Custom error message
     #[error("{0}")]
     CustomError(String),
 

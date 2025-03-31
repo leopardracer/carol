@@ -14,23 +14,12 @@ use crate::{DateTime, Duration, File, FileStatus, Utc};
 
 /// Carol client.
 ///
-/// Consists of two parts: cached files database and filesystem cache directory,
-/// where the files are actually stored.
-///
-/// This client is responsible for synchronization between cache directory and
-/// database states.
-/// The main rule is:
-///  - File is present in database and has status `Ready` if and only if
-///    it is properly stored on the disk.
-///
 /// Operations like [`Client::get`] and [`Client::remove`] are performed in a transactional manner
-/// and must not result in an invalid state.
+/// and should not result in an invalid state.
 /// If the state becomes broken anyway, maintenance could possibly detect corrupted state
 /// and fix it.
 ///
-/// Carol uses reference counter approach to track which files are "used" at the moment
-/// and cannot be removed. Current references to the file are stored in the databse.
-/// Each alive [`File`] variable is treated as a reference and this reference is removed on drop.
+/// See for [crate-level documentation][crate] for more information.
 pub struct Client {
     /// Path to cache directory.
     pub(crate) cache_dir: PathBuf,
@@ -46,22 +35,21 @@ pub struct Client {
 impl Client {
     /// Initialize Carol client.
     ///
-    /// Initializes database if it doesn't exist.
+    /// Initializes cache directory and database if they don't exist.
     pub async fn init<P>(database_url: &str, cache_dir: P) -> Result<Self, Error>
     where
         P: AsRef<Path>,
     {
         trace!("running migrations on {}", database_url);
         database::run_migrations(database_url).await?;
+
         trace!("establishing cache database connection: {}", database_url);
         let db = database::establish_connection(database_url).await?;
-        trace!("checking cache directory: {}", cache_dir.as_ref().display());
-        let meta = fs::metadata(cache_dir.as_ref()).await?;
-        if !meta.is_dir() {
-            return Err(Error::CustomError(
-                "cache path is not a directory".to_string(),
-            ));
+
+        if !cache_dir.as_ref().exists() {
+            fs::create_dir_all(cache_dir.as_ref()).await?;
         }
+
         Ok(Self {
             cache_dir: cache_dir.as_ref().to_path_buf(),
             db,
@@ -357,8 +345,6 @@ impl fmt::Debug for Client {
             .finish()
     }
 }
-
-// TODO: probably we need some timeouts for downloading/awaiting
 
 /// Client fixtures. Helps in testing client-related code.
 #[cfg(test)]
