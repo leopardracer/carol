@@ -17,6 +17,7 @@ stresstest = []
 anyhow = "1"
 clap = { version = "4", features = ["derive", "string"] }
 chrono = { version = "0.4", features = ["serde"] }
+deadpool = "0.12"
 directories = "6"
 diesel = { version = "2", features = [
     "sqlite",

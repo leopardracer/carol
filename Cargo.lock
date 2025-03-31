@@ -197,6 +197,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "deadpool",
  "diesel",
  "diesel-async",
  "diesel_migrations",

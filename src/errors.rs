@@ -8,17 +8,17 @@ pub use diesel::result::{ConnectionError, Error as DieselError};
 /// Cache database related errors.
 #[derive(thiserror::Error, Debug)]
 pub enum DatabaseError {
-    #[error("database connection failed: {0}")]
+    #[error("connection failed")]
     ConnectionError(#[from] ConnectionError),
 
-    #[error("database migration failed: {0}")]
+    #[error("migration failed: {0}")]
     MigrationError(String),
 
-    #[error("database error: {0}")]
+    #[error(transparent)]
     DieselError(#[from] DieselError),
 
-    #[error("failed to remove entry: {0}")]
-    RemoveError(RemoveErrorReason),
+    #[error("failed to remove entry")]
+    RemoveError(#[from] RemoveErrorReason),
 }
 
 /// Reason why remove failed.
@@ -27,7 +27,7 @@ pub enum RemoveErrorReason {
     #[error("reference counter is not 0")]
     UsedFile,
 
-    #[error("entry status is not ToRemove")]
+    #[error("entry status is not 'ToRemove'")]
     WrongStatus,
 }
 
@@ -47,13 +47,13 @@ impl DatabaseError {
 /// Carol client error.
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
-    #[error("{0}")]
+    #[error("database error")]
     DatabaseError(#[from] DatabaseError),
 
-    #[error("I/O error: {0}")]
+    #[error("I/O error")]
     IoError(#[from] std::io::Error),
 
-    #[error("download error: {0}")]
+    #[error("download error")]
     DownloadError(#[from] reqwest::Error),
 
     #[error("awaited file failed to download")]
@@ -62,10 +62,7 @@ pub enum Error {
     #[error("{0}")]
     CustomError(String),
 
-    #[error("internal error: {0}")]
-    InternalError(String),
-
-    #[error("{0}")]
+    #[error(transparent)]
     NonUtf8PathError(#[from] NonUtf8PathError),
 }
 

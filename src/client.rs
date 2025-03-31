@@ -1,3 +1,4 @@
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use tokio::fs;
@@ -46,14 +47,14 @@ impl Client {
     /// Initialize Carol client.
     ///
     /// Initializes database if it doesn't exist.
-    pub async fn init<P>(database_path: &str, cache_dir: P) -> Result<Self, Error>
+    pub async fn init<P>(database_url: &str, cache_dir: P) -> Result<Self, Error>
     where
         P: AsRef<Path>,
     {
-        trace!("running migrations on {}", database_path);
-        database::run_migrations(database_path).await?;
-        trace!("establishing cache database connection: {}", database_path);
-        let db = database::establish_connection(database_path).await?;
+        trace!("running migrations on {}", database_url);
+        database::run_migrations(database_url).await?;
+        trace!("establishing cache database connection: {}", database_url);
+        let db = database::establish_connection(database_url).await?;
         trace!("checking cache directory: {}", cache_dir.as_ref().display());
         let meta = fs::metadata(cache_dir.as_ref()).await?;
         if !meta.is_dir() {
@@ -64,7 +65,7 @@ impl Client {
         Ok(Self {
             cache_dir: cache_dir.as_ref().to_path_buf(),
             db,
-            database_url: database_path.to_string(),
+            database_url: database_url.to_string(),
             default_duration: None,
         })
     }
@@ -344,6 +345,16 @@ impl Client {
             }
         }
         Ok(())
+    }
+}
+
+impl fmt::Debug for Client {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Client")
+            .field("cache_dir", &self.cache_dir)
+            .field("database_url", &self.database_url)
+            .field("default_duration", &self.default_duration)
+            .finish()
     }
 }
 

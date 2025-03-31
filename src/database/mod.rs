@@ -4,20 +4,16 @@
 
 use diesel::{ConnectionError, ConnectionResult, SqliteConnection};
 use diesel_async::async_connection_wrapper::AsyncConnectionWrapper;
-use diesel_async::pooled_connection::deadpool;
-use diesel_async::pooled_connection::{AsyncDieselConnectionManager, ManagerConfig};
 use diesel_async::sync_connection_wrapper::SyncConnectionWrapper;
 use diesel_async::{AsyncConnection, SimpleAsyncConnection};
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness};
 use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
-use tokio::time::Duration;
+use tokio::time::{self, Duration};
 use tracing::trace;
 
-#[doc(no_inline)]
-pub use diesel_async::pooled_connection::deadpool::BuildError;
-
 use crate::errors::DatabaseError;
+use crate::RetryPolicy;
 
 pub mod api;
 pub mod models;
@@ -39,10 +35,18 @@ const MIGRATIONS: EmbeddedMigrations =
 const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Establish connection with SQLite database and configure it with:
+///
 /// - `PRAGMA journal_mode = WAL`
 /// - `PRAGMA synchronous = NORMAL`
 /// - `PRAGMA busy_timeout = 10_000`
-fn establish_connection_inner(database_url: &str) -> BoxFuture<ConnectionResult<Connection>> {
+///
+/// `retry` defines retry policy for pragma statements execution.
+/// It is unrecommended to use [`RetryPolicy::None`], because multiple connections creations
+/// will very likely result into "database is locked error".
+fn establish_connection_inner(
+    database_url: &str,
+    retry: RetryPolicy,
+) -> BoxFuture<ConnectionResult<Connection>> {
     let fut = async move {
         trace!("establishing connection with {}", database_url);
         let mut connection = Connection::establish(database_url).await?;
@@ -51,14 +55,42 @@ fn establish_connection_inner(database_url: &str) -> BoxFuture<ConnectionResult<
             BUSY_TIMEOUT.as_millis()
         );
         trace!("executing: {}", &query);
-        connection
-            .batch_execute(&query)
-            .await
-            .map_err(ConnectionError::CouldntSetupConfiguration)?;
-        Ok(connection)
+        let result = connection.batch_execute(&query).await;
+
+        match result {
+            Ok(_) => Ok(connection),
+            Err(err) => {
+                let err = ConnectionError::CouldntSetupConfiguration(err);
+                match retry {
+                    RetryPolicy::None => Err(err),
+                    RetryPolicy::Fixed { number, period } => {
+                        trace!("SQLite connection configuration failed: {:?}", err);
+                        let mut result: ConnectionResult<Connection> = Err(err);
+                        for i in 0..number {
+                            trace!("retrying, attempt #{}", i + 1);
+                            time::sleep(period).await;
+                            if let Err(err) = connection.batch_execute(&query).await {
+                                // Last occured error will be returned
+                                trace!("SQLite connection configuration failed: {:?}", err);
+                                result = Err(ConnectionError::CouldntSetupConfiguration(err));
+                            } else {
+                                result = Ok(connection);
+                                break;
+                            }
+                        }
+                        result
+                    }
+                }
+            }
+        }
     };
     fut.boxed()
 }
+
+pub const DEFAULT_CONNECTION_RETRY: RetryPolicy = RetryPolicy::Fixed {
+    number: 10, // We REALLY want this connection
+    period: Duration::from_millis(100),
+};
 
 /// Establish connection to SQLite database with database_url.
 ///
@@ -69,13 +101,15 @@ fn establish_connection_inner(database_url: &str) -> BoxFuture<ConnectionResult<
 /// - `PRAGMA journal_mode = WAL`
 /// - `PRAGMA synchronous = NORMAL`
 /// - `PRAGMA busy_timeout = 10_000`
+///
+/// Retry policy [`DEFAULT_CONNECTION_RETRY`] will be applied.
 pub async fn establish_connection(database_url: &str) -> DatabaseResult<Connection> {
-    Ok(establish_connection_inner(database_url).await?)
+    Ok(establish_connection_inner(database_url, DEFAULT_CONNECTION_RETRY).await?)
 }
 
 /// Run pending migrations on SQLite database specified with `database_url`.
 pub async fn run_migrations(database_url: &str) -> DatabaseResult<()> {
-    let connection = establish_connection_inner(database_url).await?;
+    let connection = establish_connection(database_url).await?;
     let mut async_wrapper: AsyncConnectionWrapper<Connection> =
         AsyncConnectionWrapper::from(connection);
 
@@ -95,34 +129,6 @@ pub async fn run_migrations(database_url: &str) -> DatabaseResult<()> {
     })
     .await
     .map_err(|e| DatabaseError::MigrationError(e.to_string()))
-}
-
-/// Pool of connections to cache database.
-///
-/// Use [`build_pool`] or [`build_pool_with_size`] to create.
-pub type Pool = deadpool::Pool<Connection>;
-
-/// Build database connection pool.
-/// Max size of the pool defaults to `cpu_count * 4`.
-///
-/// Backed by [`diesel_async::pooled_connection::deadpool`].
-pub fn build_pool(database_url: &str) -> Result<Pool, BuildError> {
-    let mut manager_config = ManagerConfig::default();
-    manager_config.custom_setup = Box::new(establish_connection_inner);
-    let manager =
-        AsyncDieselConnectionManager::<Connection>::new_with_config(database_url, manager_config);
-    Pool::builder(manager).build()
-}
-
-/// Build database connection pool of certain max size.
-///
-/// Backed by [`diesel_async::pooled_connection::deadpool`].
-pub fn build_pool_with_size(database_url: &str, max_size: usize) -> Result<Pool, BuildError> {
-    let mut manager_config = ManagerConfig::default();
-    manager_config.custom_setup = Box::new(establish_connection_inner);
-    let manager =
-        AsyncDieselConnectionManager::<Connection>::new_with_config(database_url, manager_config);
-    Pool::builder(manager).max_size(max_size).build()
 }
 
 /// Database fixtures. Helps in testing database-related code.
@@ -238,37 +244,5 @@ mod tests {
         establish_connection(&db.db_path)
             .await
             .expect("connect to existing database");
-    }
-
-    async fn do_some_pool_operations(pool: Pool) {
-        let mut connection = pool.get().await.expect("get connection from pool");
-        api::get_all(connection.as_mut())
-            .await
-            .expect("get all entries");
-        api::new_entry(connection.as_mut(), "http://new-url", "/new/path", None)
-            .await
-            .expect("insert new entry");
-    }
-
-    #[tokio::test]
-    #[traced_test]
-    async fn test_build_pool() {
-        let (fixture, _) = CacheDatabaseFixture::new_with_default_entry()
-            .await
-            .unwrap();
-
-        let pool = build_pool(&fixture.db_path).expect("build pool");
-        do_some_pool_operations(pool).await;
-    }
-
-    #[tokio::test]
-    #[traced_test]
-    async fn test_build_pool_with_size() {
-        let (fixture, _) = CacheDatabaseFixture::new_with_default_entry()
-            .await
-            .unwrap();
-
-        let pool = build_pool_with_size(&fixture.db_path, 2).expect("build pool");
-        do_some_pool_operations(pool).await;
     }
 }

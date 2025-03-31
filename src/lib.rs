@@ -25,6 +25,7 @@ mod garbage_collector;
 mod maintenance;
 
 pub mod errors;
+pub mod pool;
 
 pub use client::Client;
 pub use database::schema::FileStatus;
@@ -37,3 +38,16 @@ pub use maintenance::MaintenanceRunner;
 pub use chrono::{DateTime, Utc};
 #[doc(no_inline)]
 pub use tokio::time::Duration;
+
+/// Retry policy.
+///
+/// Defines whether to retry an action in case of failure and how to do it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetryPolicy {
+    /// Do not retry action.
+    None,
+
+    /// Retry action `number` times (after failure on the first attempt)
+    /// sleeping for `period` between attempts.
+    Fixed { number: usize, period: Duration },
+}
