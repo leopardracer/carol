@@ -9,7 +9,7 @@
 //! The main idea of Carol is to store downloaded files in the filesystem, tracking and
 //! managing their state. When the same URL will be requested next time, path to already
 //! existing file will be returned.
-//! 
+//!
 //! Carol consists of two parts:
 //!
 //! - **cache directory** in your filesystem, where downloaded files are stored
@@ -67,7 +67,7 @@
 //!
 //! Carol ignroes HTTP caching policies deliberately. Instead it allows user to decide,
 //! how long the file should be stored in cache.
-//! 
+//!
 //! *Coming soon...*
 //!
 
