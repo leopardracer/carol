@@ -80,7 +80,7 @@ mod maintenance;
 pub mod errors;
 pub mod pool;
 
-pub use client::Client;
+pub use client::{Client, ClientBuilder};
 pub use database::schema::FileStatus;
 pub use file::File;
 pub use garbage_collector::GarbageCollector;

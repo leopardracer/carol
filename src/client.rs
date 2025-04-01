@@ -13,6 +13,61 @@ use crate::database::{self, api, Connection};
 use crate::errors::{Error, NonUtf8PathError};
 use crate::{DateTime, Duration, File, FileStatus, Utc};
 
+/// Used to create precisely configured [`Client`].
+#[must_use]
+#[derive(Clone, Debug, Default)]
+pub struct ClientBuilder {
+    cache_dir: PathBuf,
+    database_url: String,
+    reqwest_client: Option<ReqwestClient>,
+    default_file_duration: Option<Duration>,
+}
+
+impl ClientBuilder {
+    /// Create new client builder.
+    pub fn new<P>(database_url: &str, cache_dir: P) -> Self
+    where
+        P: AsRef<Path>,
+    {
+        let mut builder = Self::default();
+        builder.database_url = database_url.to_string();
+        builder.cache_dir = cache_dir.as_ref().to_path_buf();
+        builder
+    }
+
+    /// Set [`reqwest::Client`] to use for downloading.
+    ///
+    /// If not set, [`Client`] will build default [`reqwest::Client`] on initialization.
+    pub fn reqwest_client(mut self, reqwest_client: ReqwestClient) -> Self {
+        self.reqwest_client = Some(reqwest_client);
+        self
+    }
+
+    /// Set default file duration.
+    ///
+    /// `duration` will be added to [`Utc::now()`] and set as an expiration timestamp when
+    /// downloading a file. If not set, new files won't have any expiration timestamp and
+    /// will never expire.
+    pub fn default_file_duration(mut self, duration: Duration) -> Self {
+        self.default_file_duration = Some(duration);
+        self
+    }
+
+    /// Build client.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if client initialization fails.
+    pub async fn build(self) -> Result<Client, Error> {
+        let mut client = Client::init(&self.database_url, &self.cache_dir).await?;
+        if let Some(reqwest_client) = self.reqwest_client {
+            client.reqwest_client = reqwest_client;
+        }
+        client.default_duration = self.default_file_duration;
+        Ok(client)
+    }
+}
+
 /// Carol client.
 ///
 /// Operations like [`Client::get`] and [`Client::remove`] are performed in a transactional manner
@@ -38,6 +93,14 @@ pub struct Client {
 }
 
 impl Client {
+    /// Create [`ClientBuilder`] for precise [`Client`] configuration.
+    pub fn builder<P>(database_url: &str, cache_dir: P) -> ClientBuilder
+    where
+        P: AsRef<Path>,
+    {
+        ClientBuilder::new(database_url, cache_dir)
+    }
+
     /// Initialize Carol client.
     ///
     /// Initializes cache directory and database if they don't exist.
@@ -66,15 +129,6 @@ impl Client {
             default_duration: None,
             reqwest_client,
         })
-    }
-
-    /// Set default duration for downloaded files.
-    ///
-    /// `duration` will be added to [`Utc::now()`] and set
-    /// as an expiration timestamp for all downloaded files.
-    /// If not set, files won't have any expiration timestamp and will never expire.
-    pub fn set_default_duration(&mut self, duration: Duration) {
-        self.default_duration = Some(duration);
     }
 
     /// Append database URL to cache entry.

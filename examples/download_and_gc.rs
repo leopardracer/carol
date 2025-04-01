@@ -4,8 +4,10 @@ use carol::{Client, Duration, GarbageCollector};
 
 // Accepts URLs from stdin and get them
 async fn accept_get_requests(cache_dir: String, db_path: String) -> anyhow::Result<()> {
-    let mut client = Client::init(&cache_dir, &db_path).await?;
-    client.set_default_duration(Duration::from_secs(20));
+    let mut client = Client::builder(&cache_dir, &db_path)
+        .default_file_duration(Duration::from_secs(20))
+        .build()
+        .await?;
 
     let stdin = io::stdin();
     let mut lines = BufReader::new(stdin).lines();
