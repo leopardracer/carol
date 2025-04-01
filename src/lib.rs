@@ -90,7 +90,7 @@ pub use maintenance::MaintenanceRunner;
 #[doc(no_inline)]
 pub use chrono::{DateTime, Utc};
 #[doc(no_inline)]
-pub use tokio::time::Duration;
+pub use reqwest::Client as ReqwestClient;
 
 /// Retry policy.
 ///
@@ -102,5 +102,8 @@ pub enum RetryPolicy {
 
     /// Retry action `number` times (after failure on the first attempt)
     /// sleeping for `period` between attempts.
-    Fixed { number: usize, period: Duration },
+    Fixed {
+        number: usize,
+        period: std::time::Duration,
+    },
 }

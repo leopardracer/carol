@@ -1,5 +1,6 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use reqwest::Client as ReqwestClient;
 use tokio::fs;
@@ -11,7 +12,7 @@ use tracing::{debug, error, trace, warn};
 use crate::database::models::CacheEntry;
 use crate::database::{self, api, Connection};
 use crate::errors::{Error, NonUtf8PathError};
-use crate::{DateTime, Duration, File, FileStatus, Utc};
+use crate::{DateTime, File, FileStatus, Utc};
 
 /// Used to create precisely configured [`Client`].
 #[must_use]
@@ -29,10 +30,11 @@ impl ClientBuilder {
     where
         P: AsRef<Path>,
     {
-        let mut builder = Self::default();
-        builder.database_url = database_url.to_string();
-        builder.cache_dir = cache_dir.as_ref().to_path_buf();
-        builder
+        Self {
+            database_url: database_url.to_string(),
+            cache_dir: cache_dir.as_ref().to_path_buf(),
+            ..Default::default()
+        }
     }
 
     /// Set [`reqwest::Client`] to use for downloading.

@@ -1,6 +1,8 @@
+use std::time::Duration;
+
 use tokio::io::{self, AsyncBufReadExt, BufReader};
 
-use carol::{Client, Duration, GarbageCollector};
+use carol::{Client, GarbageCollector};
 
 // Accepts URLs from stdin and get them
 async fn accept_get_requests(cache_dir: String, db_path: String) -> anyhow::Result<()> {

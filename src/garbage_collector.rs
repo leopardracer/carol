@@ -1,9 +1,11 @@
+use std::time::Duration;
+
 use chrono::Utc;
 use tracing::{error, info, warn};
 
 use crate::database::api;
 use crate::errors::Error;
-use crate::{Client, Duration, FileStatus};
+use crate::{Client, FileStatus};
 
 /// Garbage collector.
 ///
