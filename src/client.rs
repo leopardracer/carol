@@ -146,11 +146,6 @@ impl Client {
         })
     }
 
-    /// Append database URL to cache entry.
-    fn to_file(&self, entry: CacheEntry) -> File {
-        File::from_entry(entry, self.database_url.clone())
-    }
-
     /// Download the file from URL into cache.
     ///
     /// If the file is already cached, it won't be re-downloaded.
@@ -446,6 +441,11 @@ impl Client {
             }
         }
         Ok(())
+    }
+
+    /// Append database URL to cache entry.
+    fn to_file(&self, entry: CacheEntry) -> File {
+        File::from_entry(entry, self.database_url.clone())
     }
 }
 
