@@ -59,10 +59,11 @@ $ readlink example
 
 ## Roadmap
 
-- [ ] Retry policies for client and maintainers
+- [x] Retry policies for client
+- [ ] Maintainers
 - [ ] Timeouts for different operations
 - [ ] Add more scenarios to integration tests
 - [x] Client configuration options (possibly ClientBuilder)
-- [ ] Update (re-download) file feature
+- [x] Update (re-download) file feature
 - [ ] Refine logging
 - [ ] Add "Last used" timestamp to file meta
