@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use tokio::fs;
-use tracing::warn;
+use tracing::{trace, warn};
 
 use crate::database;
 use crate::database::api;
@@ -108,6 +108,7 @@ impl File {
     /// Increment files reference counter.
     /// When reference counter is > 0, the file will not be removed.
     pub(crate) async fn lock(&mut self) -> Result<(), Error> {
+        trace!("locking file {:?}", self);
         let mut connection = database::establish_connection(&self.database_url).await?;
         api::increment_ref(&mut connection, self.id).await?;
         self.released = false;
@@ -119,6 +120,7 @@ impl File {
     /// The file will be released automatically on drop, however you won't be able to
     /// handle the errors which may occur. Use this function to catch releasing errors.
     pub async fn release(mut self) -> Result<(), Error> {
+        trace!("releasing file {:?}", self);
         let mut connection = database::establish_connection(&self.database_url).await?;
         api::decrement_ref(&mut connection, self.id).await?;
         self.released = true;

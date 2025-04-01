@@ -230,10 +230,14 @@ impl Client {
     where
         T: AsRef<str>,
     {
-        api::get_by_url(&mut self.db, url.as_ref())
+        debug!("lookup URL '{}'", url.as_ref());
+        let mut file = api::get_by_url(&mut self.db, url.as_ref())
             .await
-            .map(|res| res.map(|entry| self.to_file(entry)))
-            .map_err(Into::into)
+            .map(|res| res.map(|entry| self.to_file(entry)))?;
+        if let Some(file) = &mut file {
+            file.lock().await?;
+        }
+        Ok(file)
     }
 
     /// Set expiration timestamp for URL.
@@ -258,18 +262,23 @@ impl Client {
     where
         T: AsRef<str>,
     {
+        debug!("removing URL '{}' from cache", url.as_ref());
         // If this fails, nothing is wrong with the state.
         // File can be safely removed later.
         self.schedule_for_removal(&url).await?;
 
         if let Some(file) = self.find(url).await? {
+            let id = file.id;
+            let cache_path = file.cache_path().to_path_buf();
+            file.release().await?;
+
             // If this fails, the file will still be marked as `ToRemove`,
             // so it will be garbage collected later.
-            api::remove_entry(&mut self.db, file.id).await?;
+            api::remove_entry(&mut self.db, id).await?;
 
             // If this fails, we will have a dangling file in cache directory,
             // which will be removed later on maintenance.
-            fs::remove_file(file.cache_path()).await?;
+            fs::remove_file(cache_path).await?;
         }
         Ok(())
     }
@@ -281,6 +290,7 @@ impl Client {
     where
         T: AsRef<str>,
     {
+        debug!("scheduling URL '{}' for removal", url.as_ref());
         if let Some(file) = self.find(url).await? {
             api::update_status(&mut self.db, file.id, FileStatus::ToRemove).await?;
         }
@@ -310,10 +320,18 @@ impl Client {
 
     /// List all cache entries.
     pub async fn list(&mut self) -> Result<Vec<File>, Error> {
-        api::get_all(&mut self.db)
-            .await
-            .map(|res| res.into_iter().map(|entry| self.to_file(entry)).collect())
-            .map_err(Into::into)
+        let mut files = api::get_all(&mut self.db).await.map(|res| {
+            res.into_iter()
+                .map(|entry| self.to_file(entry))
+                .collect::<Vec<_>>()
+        })?;
+
+        // TODO: iterate files asynchronously
+        for file in files.iter_mut() {
+            file.lock().await?;
+        }
+
+        Ok(files)
     }
 
     /// Update file with given URL.
@@ -330,9 +348,61 @@ impl Client {
     where
         T: AsRef<str>,
     {
-        if self.find(url.as_ref()).await?.is_some() {
+        debug!("updating URL '{}'", url.as_ref());
+        if let Some(file) = self.find(url.as_ref()).await? {
+            file.release().await?;
             self.remove(url.as_ref()).await?;
             self.get(url.as_ref()).await
+        } else {
+            Err(Error::UrlNotCached(url.as_ref().to_string()))
+        }
+    }
+
+    /// Wait until file reference counter for URL becomes 0.
+    ///
+    /// Loops with period of 1 second until reach `timeout`.
+    ///
+    /// # Warning
+    ///
+    /// This method **does not guarantee** that right after return file cannot become again.
+    /// E.g. remove right after this call may stil fail with "reference counter is not 0".
+    /// This will work only in relaxed scenarios, when files are not frequently work.
+    /// Basically used during maintenance.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    ///
+    /// - URL is not cached
+    /// - Timeout is exceeded
+    pub async fn wait_url_released<T>(&mut self, url: T, timeout: Duration) -> Result<(), Error>
+    where
+        T: AsRef<str>,
+    {
+        const PERIOD: Duration = Duration::from_secs(1);
+
+        debug!("waiting URL '{}' to become free", url.as_ref());
+        if let Some(file) = self.find(url.as_ref()).await? {
+            let id = file.id;
+            file.release().await?;
+
+            let mut inner = async || -> Result<(), Error> {
+                loop {
+                    let entry = api::get_entry(&mut self.db, id).await?;
+                    if entry.ref_count == 0 {
+                        break;
+                    } else {
+                        // file is still used, come back later
+                        time::sleep(PERIOD).await;
+                    }
+                }
+                Ok(())
+            };
+
+            match time::timeout(timeout, inner()).await {
+                Ok(result) => result,
+                Err(_) => Err(Error::TimeoutExceeded),
+            }
         } else {
             Err(Error::UrlNotCached(url.as_ref().to_string()))
         }
@@ -366,7 +436,6 @@ impl Client {
             }
             let updated_entry =
                 api::update_status(&mut self.db, entry.id, FileStatus::Ready).await?;
-            debug!("updating entry status: {:?}", updated_entry);
             Ok(updated_entry)
         };
 
@@ -440,25 +509,6 @@ impl Client {
                 return Err(Error::AwaitingError);
             }
         }
-    }
-
-    /// Wait until file reference counter becomes 0.
-    ///
-    /// Notice that reference counter may be increased after this function returns.
-    /// So removing file right after this function call may still fail.
-    async fn wait_file_free(&mut self, file: &File) -> Result<(), Error> {
-        debug!("waiting file to become free: {:?}", file);
-        loop {
-            let entry = api::get_entry(&mut self.db, file.id).await?;
-            trace!("ref count = {}", entry.ref_count);
-            if entry.ref_count == 0 {
-                break;
-            } else {
-                // file is still used, come back later
-                time::sleep(Duration::from_secs(1)).await;
-            }
-        }
-        Ok(())
     }
 
     /// Append database URL to cache entry.
@@ -563,6 +613,7 @@ mod tests {
     use super::fixtures::ClientFixture;
     use super::*;
     use crate::errors::{DatabaseError, RemoveErrorReason};
+    use std::time::Duration;
     use tempdir::TempDir;
     use tokio::fs;
     use tracing_test::traced_test;
@@ -643,7 +694,7 @@ mod tests {
         // Create resource after 2500 millisecs
         // Give client time to fail 2 times before providing resource
         let create_resource = async || {
-            tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+            tokio::time::sleep(Duration::from_millis(2500)).await;
             use http_test_server::http::{Method, Status};
 
             let resource = test_server.create_resource("/new_file.txt");
@@ -692,7 +743,7 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
-    async fn test_remove_fails() {
+    async fn test_remove_failure() {
         let fixture = ClientFixture::new().await.unwrap();
         let mut client = fixture.client;
         let url = format!("{}/file.txt", &fixture.host);
@@ -721,6 +772,54 @@ mod tests {
         let new_file = client.update(&url).await.expect("update cache entry");
         let new_timestamp = new_file.created();
         assert!(new_timestamp > &old_timestamp);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_wait_url_released() {
+        let fixture = ClientFixture::new().await.unwrap();
+        let mut client = fixture.client;
+        let url = format!("{}/file.txt", &fixture.host);
+        let file = client.get(&url).await.expect("get file from URL");
+
+        // Release file after 1 second
+        let release_file = async || {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            file.release().await.unwrap();
+        };
+
+        // Wait 2 seconds for URL to become free
+        let mut wait_for_url_released = async || {
+            client
+                .wait_url_released(&url, Duration::from_secs(2))
+                .await
+                .expect("wait for URL released");
+        };
+
+        tokio::join!(release_file(), wait_for_url_released());
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_wait_url_released_failure() {
+        let fixture = ClientFixture::new().await.unwrap();
+        let mut client = fixture.client;
+        let url = format!("{}/file.txt", &fixture.host);
+        let file = client.get(&url).await.expect("get file from URL");
+
+        // Release file after 2 second
+        let release_file = async move || {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            file.release().await.unwrap();
+        };
+
+        // Wait 1 seconds for URL to become free (should fail)
+        let mut wait_for_url_released = async || {
+            let result = client.wait_url_released(&url, Duration::from_secs(1)).await;
+            assert!(matches!(dbg!(result), Err(Error::TimeoutExceeded)));
+        };
+
+        tokio::join!(release_file(), wait_for_url_released());
     }
 
     // TODO: tests granularity:

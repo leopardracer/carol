@@ -77,6 +77,10 @@ pub enum Error {
     #[error("URL '{0}' is not cached")]
     UrlNotCached(String),
 
+    /// Timeout exceeded
+    #[error("timeout exceeded")]
+    TimeoutExceeded,
+
     /// Custom error message
     #[error("{0}")]
     CustomError(String),
