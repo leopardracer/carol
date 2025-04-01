@@ -1,6 +1,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use reqwest::Client as ReqwestClient;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::time;
@@ -19,6 +20,8 @@ use crate::{DateTime, Duration, File, FileStatus, Utc};
 /// If the state becomes broken anyway, maintenance could possibly detect corrupted state
 /// and fix it.
 ///
+/// Downloading is implemented through [`reqwest`].
+///
 /// See for [crate-level documentation][crate] for more information.
 pub struct Client {
     /// Path to cache directory.
@@ -27,8 +30,10 @@ pub struct Client {
     /// Cache database connection.
     pub(crate) db: Connection,
 
+    /// We store origin of the database to pass to `File`-s
     database_url: String,
 
+    reqwest_client: ReqwestClient,
     default_duration: Option<Duration>,
 }
 
@@ -50,11 +55,16 @@ impl Client {
             fs::create_dir_all(cache_dir.as_ref()).await?;
         }
 
+        let reqwest_client = ReqwestClient::builder()
+            .build()
+            .map_err(Error::ReqwestClientBuildError)?;
+
         Ok(Self {
             cache_dir: cache_dir.as_ref().to_path_buf(),
             db,
             database_url: database_url.to_string(),
             default_duration: None,
+            reqwest_client,
         })
     }
 
@@ -224,7 +234,12 @@ impl Client {
 
         let mut fetch = async || -> Result<CacheEntry, Error> {
             trace!("fetching {}", &entry.url);
-            let response = reqwest::get(&entry.url).await?.error_for_status()?;
+            let response = self
+                .reqwest_client
+                .get(&entry.url)
+                .send()
+                .await?
+                .error_for_status()?;
             let code = response.status().as_u16();
             if code != 200 {
                 // For responses with 2XX codes we probably only interested in 200.
@@ -342,6 +357,7 @@ impl fmt::Debug for Client {
             .field("cache_dir", &self.cache_dir)
             .field("database_url", &self.database_url)
             .field("default_duration", &self.default_duration)
+            .field("reqwest_client", &self.reqwest_client)
             .finish()
     }
 }

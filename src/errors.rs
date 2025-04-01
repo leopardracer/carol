@@ -57,6 +57,10 @@ pub enum Error {
     #[error("I/O error")]
     IoError(#[from] std::io::Error),
 
+    /// Error during building reqwest client
+    #[error("failed to build reqwest client")]
+    ReqwestClientBuildError(#[source] reqwest::Error),
+
     /// Error during downloading of the file
     #[error("download error")]
     DownloadError(#[from] reqwest::Error),
