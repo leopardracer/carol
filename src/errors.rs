@@ -73,6 +73,10 @@ pub enum Error {
     #[error("awaited file failed to download")]
     AwaitingError,
 
+    /// Occurs when attempted to perform some action on URL which is not cached.
+    #[error("URL '{0}' is not cached")]
+    UrlNotCached(String),
+
     /// Custom error message
     #[error("{0}")]
     CustomError(String),

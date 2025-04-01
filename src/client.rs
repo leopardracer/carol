@@ -243,11 +243,11 @@ impl Client {
     where
         T: AsRef<str>,
     {
-        if let Some(file) = self.find(url).await? {
+        if let Some(file) = self.find(url.as_ref()).await? {
             api::update_expires(&mut self.db, file.id, Some(expires_at)).await?;
             Ok(())
         } else {
-            Err(Error::CustomError("URL is not cached".to_string()))
+            Err(Error::UrlNotCached(url.as_ref().to_string()))
         }
     }
 
@@ -318,6 +318,28 @@ impl Client {
             .await
             .map(|res| res.into_iter().map(|entry| self.to_file(entry)).collect())
             .map_err(Into::into)
+    }
+
+    /// Update file with given URL.
+    ///
+    /// This will remove old cache entry and create new one.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    ///
+    /// - URL is not cached
+    /// - File is used at the moment
+    pub async fn update<T>(&mut self, url: T) -> Result<File, Error>
+    where
+        T: AsRef<str>,
+    {
+        if self.find(url.as_ref()).await?.is_some() {
+            self.remove(url.as_ref()).await?;
+            self.get(url.as_ref()).await
+        } else {
+            Err(Error::UrlNotCached(url.as_ref().to_string()))
+        }
     }
 
     /// Query entry URL and store response body in target file. Then update entry status.
@@ -659,4 +681,23 @@ mod tests {
             url
         )));
     }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_update() {
+        let fixture = ClientFixture::new().await.unwrap();
+        let mut client = fixture.client;
+        let url = format!("{}/file.txt", &fixture.host);
+        let old_file = client.get(&url).await.unwrap();
+        let old_timestamp = old_file.created().clone();
+        // release file to allow updating it
+        old_file.release().await.unwrap();
+
+        let new_file = client.update(&url).await.expect("update cache entry");
+        let new_timestamp = new_file.created();
+        assert!(new_timestamp > &old_timestamp);
+    }
+
+    // TODO: tests granularity:
+    //       don't mix up methods in tests, prepare proper cache state manually instead
 }
