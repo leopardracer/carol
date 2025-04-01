@@ -14,6 +14,8 @@ Find out more from docs:
 cargo doc --open
 ```
 
+See also `examples/` directory.
+
 ## API example
 
 ```rust
@@ -60,7 +62,7 @@ $ readlink example
 - [ ] Retry policies for client and maintainers
 - [ ] Timeouts for different operations
 - [ ] Add more scenarios to integration tests
-- [ ] Client configuration options (possibly ClientBuilder)
+- [x] Client configuration options (possibly ClientBuilder)
 - [ ] Update (re-download) file feature
 - [ ] Refine logging
 - [ ] Add "Last used" timestamp to file meta

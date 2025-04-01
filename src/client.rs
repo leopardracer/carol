@@ -12,7 +12,7 @@ use tracing::{debug, error, trace, warn};
 use crate::database::models::CacheEntry;
 use crate::database::{self, api, Connection};
 use crate::errors::{Error, NonUtf8PathError};
-use crate::{DateTime, File, FileStatus, Utc};
+use crate::{DateTime, File, FileStatus, RetryPolicy, Utc};
 
 /// Used to create precisely configured [`Client`].
 #[must_use]
@@ -22,6 +22,7 @@ pub struct ClientBuilder {
     database_url: String,
     reqwest_client: Option<ReqwestClient>,
     default_file_duration: Option<Duration>,
+    download_retry_policy: RetryPolicy,
 }
 
 impl ClientBuilder {
@@ -55,6 +56,15 @@ impl ClientBuilder {
         self
     }
 
+    /// Set retry policy for fetching new files.
+    /// Applies only to downloading process during [`Client::get`].
+    ///
+    /// If not set, [`RetryPolicy::None`] will be used.
+    pub fn download_retry_policy(mut self, policy: RetryPolicy) -> Self {
+        self.download_retry_policy = policy;
+        self
+    }
+
     /// Build client.
     ///
     /// # Errors
@@ -66,6 +76,7 @@ impl ClientBuilder {
             client.reqwest_client = reqwest_client;
         }
         client.default_duration = self.default_file_duration;
+        client.download_retry_policy = self.download_retry_policy;
         Ok(client)
     }
 }
@@ -92,6 +103,7 @@ pub struct Client {
 
     reqwest_client: ReqwestClient,
     default_duration: Option<Duration>,
+    download_retry_policy: RetryPolicy,
 }
 
 impl Client {
@@ -130,6 +142,7 @@ impl Client {
             database_url: database_url.to_string(),
             default_duration: None,
             reqwest_client,
+            download_retry_policy: RetryPolicy::None,
         })
     }
 
@@ -162,10 +175,39 @@ impl Client {
             Ok(entry) => {
                 // File was not in cache, so let's download it
                 debug!("cache miss: {:?}", entry);
-                let mut file = self
+                let result = self
                     .fetch_entry(&entry)
                     .await
-                    .map(|entry| self.to_file(entry))?;
+                    .map(|entry| self.to_file(entry));
+                let mut file = match result {
+                    Ok(file) => file,
+                    Err(err) => match self.download_retry_policy {
+                        RetryPolicy::None => return Err(err),
+                        RetryPolicy::Fixed { number, period } => {
+                            let mut result = Err(err);
+
+                            // retry cycle
+                            for i in 0..number {
+                                time::sleep(period).await;
+                                debug!("retrying fetch URL '{}', attempt #{}", entry.url, i + 1);
+                                match self
+                                    .fetch_entry(&entry)
+                                    .await
+                                    .map(|entry| self.to_file(entry))
+                                {
+                                    Ok(file) => {
+                                        result = Ok(file);
+                                        break;
+                                    }
+                                    Err(err) => result = Err(err),
+                                }
+                            }
+
+                            // latest occured error will be thrown
+                            result?
+                        }
+                    },
+                };
                 // At this point file was downloaded and stored in cache
                 // If this function fails, it means that we only failed
                 // to increment the reference counter. So it is safe
@@ -422,10 +464,11 @@ impl fmt::Debug for Client {
 #[cfg(test)]
 pub(crate) mod fixtures {
     use crate::database::fixtures::CacheDatabaseFixture;
-    use crate::Client;
+    use crate::{Client, RetryPolicy};
     use http_test_server::http::{Method, Status};
     use http_test_server::TestServer;
     use std::path::PathBuf;
+    use std::time::Duration;
     use tempdir::TempDir;
 
     type Error = Box<dyn std::error::Error>;
@@ -474,7 +517,13 @@ pub(crate) mod fixtures {
             let db = CacheDatabaseFixture::new().await?;
             let tmp = TempDir::new("carol.test.files").unwrap();
             let cache_dir = tmp.path().to_path_buf();
-            let client = Client::init(&db.db_path, &cache_dir).await?;
+            let client = Client::builder(&db.db_path, &cache_dir)
+                .download_retry_policy(RetryPolicy::Fixed {
+                    number: 3,
+                    period: Duration::from_secs(1),
+                })
+                .build()
+                .await?;
             Ok(Self {
                 web_server: Some(web_server),
                 host,
@@ -485,8 +534,8 @@ pub(crate) mod fixtures {
             })
         }
 
-        pub fn drop_web_server(&mut self) {
-            self.web_server = None;
+        pub fn drop_web_server(&mut self) -> TestServer {
+            std::mem::take(&mut self.web_server).unwrap()
         }
     }
 }
@@ -563,5 +612,51 @@ mod tests {
             .await
             .expect("get file from URL second time");
         assert_eq!(first_file.id, second_file.id);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_downloading_retry() {
+        let mut fixture = ClientFixture::new().await.unwrap();
+        let url = format!("{}/new_file.txt", &fixture.host);
+        let test_server = fixture.drop_web_server();
+
+        // Create resource after 2500 millisecs
+        // Give client time to fail 2 times before providing resource
+        let create_resource = async || {
+            tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+            use http_test_server::http::{Method, Status};
+
+            let resource = test_server.create_resource("/new_file.txt");
+            resource
+                .status(Status::OK)
+                .method(Method::GET)
+                .header("Content-Type", "text/plain")
+                .body("This is new test file.");
+        };
+
+        let get_resource = async || {
+            let mut client = fixture.client;
+            let file = client
+                .get(&url)
+                .await
+                .expect("get URL without errors after 3 retries");
+            let content = fs::read_to_string(file.cache_path())
+                .await
+                .expect("read downloaded file");
+            assert_eq!(content, "This is new test file.");
+        };
+
+        tokio::join!(create_resource(), get_resource());
+
+        // check that client tried fetching 2 times before success
+        assert!(logs_contain(&format!(
+            "retrying fetch URL '{}', attempt #1",
+            url
+        )));
+        assert!(logs_contain(&format!(
+            "retrying fetch URL '{}', attempt #2",
+            url
+        )));
     }
 }

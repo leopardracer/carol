@@ -95,9 +95,10 @@ pub use reqwest::Client as ReqwestClient;
 /// Retry policy.
 ///
 /// Defines whether to retry an action in case of failure and how to do it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RetryPolicy {
     /// Do not retry action.
+    #[default]
     None,
 
     /// Retry action `number` times (after failure on the first attempt)
