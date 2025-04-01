@@ -263,10 +263,6 @@ impl Client {
         self.schedule_for_removal(&url).await?;
 
         if let Some(file) = self.find(url).await? {
-            // If this fails, nothing changed in the state, so everything is fine.
-            // File can be safely removed later, state is not corrupted.
-            self.wait_file_free(&file).await?;
-
             // If this fails, the file will still be marked as `ToRemove`,
             // so it will be garbage collected later.
             api::remove_entry(&mut self.db, file.id).await?;
@@ -566,6 +562,7 @@ pub(crate) mod fixtures {
 mod tests {
     use super::fixtures::ClientFixture;
     use super::*;
+    use crate::errors::{DatabaseError, RemoveErrorReason};
     use tempdir::TempDir;
     use tokio::fs;
     use tracing_test::traced_test;
@@ -680,6 +677,34 @@ mod tests {
             "retrying fetch URL '{}', attempt #2",
             url
         )));
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_remove() {
+        let fixture = ClientFixture::new().await.unwrap();
+        let mut client = fixture.client;
+        let url = format!("{}/file.txt", &fixture.host);
+        let file = client.get(&url).await.expect("get file from URL");
+        file.release().await.expect("release file");
+        client.remove(&url).await.expect("remove URL from cache");
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_remove_fails() {
+        let fixture = ClientFixture::new().await.unwrap();
+        let mut client = fixture.client;
+        let url = format!("{}/file.txt", &fixture.host);
+        let file = client.get(&url).await.expect("get file from URL");
+        let result = client.remove(&url).await;
+        assert!(matches!(
+            result,
+            Err(Error::DatabaseError(DatabaseError::RemoveError(
+                RemoveErrorReason::UsedFile
+            )))
+        ));
+        file.release().await.unwrap();
     }
 
     #[tokio::test]
