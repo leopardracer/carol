@@ -51,3 +51,6 @@ tokio-cron-scheduler = { version = "0.13", features = ["signal"] }
 tokio-test = "0.4"
 tracing-test = "0.2"
 warp = "0.3"
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(tarpaulin_include)'] }
