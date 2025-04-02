@@ -517,7 +517,7 @@ impl Client {
                 }
             }
         } else {
-            return Err(Error::UrlNotCached(url.to_string()));
+            Err(Error::UrlNotCached(url.to_string()))
         }
     }
 
@@ -811,7 +811,7 @@ mod tests {
         let mut client = fixture.client;
         let url = format!("{}/file.txt", &fixture.host);
         let old_file = client.get(&url).await.unwrap();
-        let old_timestamp = old_file.created().clone();
+        let old_timestamp = *old_file.created();
         // release file to allow updating it
         old_file.release().await.unwrap();
 

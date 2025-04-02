@@ -129,7 +129,7 @@ mod web_api {
             Self {
                 url: value.url().to_string(),
                 cache_path: value.cache_path().to_path_buf(),
-                created: value.created().clone(),
+                created: *value.created(),
             }
         }
     }
@@ -162,7 +162,7 @@ mod web_api {
             .join_all()
             .await
             .into_iter()
-            .map(|res| res.map(|file| File::from(file)))
+            .map(|res| res.map(File::from))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|err| {
                 warp::reject::custom(ServerError {
