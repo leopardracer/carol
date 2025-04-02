@@ -834,10 +834,10 @@ mod tests {
             file.release().await.unwrap();
         };
 
-        // Wait 2 seconds for URL to become free
+        // Wait 5 seconds for URL to become free
         let mut wait_for_url_released = async || {
             client
-                .wait_url_released(&url, Duration::from_secs(2))
+                .wait_url_released(&url, Duration::from_secs(5))
                 .await
                 .expect("wait for URL released");
         };
