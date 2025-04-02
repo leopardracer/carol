@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use chrono::Utc;
 use tracing::{error, info};
 
@@ -78,23 +76,6 @@ impl<'c> CacheCleaner<'c> {
             }
         }
         Ok(())
-    }
-
-    /// Run cache cleaning every `duration` seconds.
-    ///
-    /// This function never returns.
-    pub async fn run_every(&mut self, duration: Duration) {
-        loop {
-            tokio::time::sleep(duration).await;
-            match self.run_once().await {
-                Ok(_) => {
-                    info!("cache cleaning succeeded");
-                }
-                Err(err) => {
-                    error!("cache cleaning failed: {}", err);
-                }
-            }
-        }
     }
 }
 
