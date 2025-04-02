@@ -7,20 +7,20 @@ use crate::database::api;
 use crate::errors::Error;
 use crate::{Client, FileStatus};
 
-/// Garbage collector.
+/// Cache cleaner.
 ///
 /// Removed expired files from cache.
-pub struct GarbageCollector<'c> {
+pub struct CacheCleaner<'c> {
     client: &'c mut Client,
 }
 
-impl<'c> GarbageCollector<'c> {
-    /// Create new garbage collector instance.
+impl<'c> CacheCleaner<'c> {
+    /// Create new cache cleaner instance.
     pub fn new(client: &'c mut Client) -> Self {
         Self { client }
     }
 
-    /// Run garbage collection once.
+    /// Run cache cleaning once.
     pub async fn run_once(&mut self) -> Result<(), Error> {
         self.schedule_for_removal().await?;
         self.remove().await?;
@@ -66,19 +66,19 @@ impl<'c> GarbageCollector<'c> {
         for entry in to_remove {
             match self.client.remove(&entry.url).await {
                 Ok(_) => {
-                    info!("successfully garbage-collected URL '{}'", &entry.url);
+                    info!("successfully removed URL '{}'", &entry.url);
                 }
                 Err(err) => {
                     // This may happened if the file was used after being scheduled for removal
                     // Its expiration timestamp may also have been updated
-                    info!("failed to garbage-collect URL '{}': {}", entry.url, err);
+                    info!("failed to remove URL '{}': {}", entry.url, err);
                 }
             }
         }
         Ok(())
     }
 
-    /// Run garbage collection every `duration` seconds.
+    /// Run cache cleaning every `duration` seconds.
     ///
     /// This function never returns.
     pub async fn run_every(&mut self, duration: Duration) {
@@ -86,10 +86,10 @@ impl<'c> GarbageCollector<'c> {
             tokio::time::sleep(duration).await;
             match self.run_once().await {
                 Ok(_) => {
-                    info!("garbage collection succeeded");
+                    info!("cache cleaning succeeded");
                 }
                 Err(err) => {
-                    error!("garbage collection failed: {}", err);
+                    error!("cache cleaning failed: {}", err);
                 }
             }
         }

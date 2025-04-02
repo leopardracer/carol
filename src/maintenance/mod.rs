@@ -1,10 +1,16 @@
+//! Maintenance operations on cache.
+
 use derive_builder::Builder;
 use tokio::fs::{self, DirEntry};
 use tracing::{debug, error, info, warn};
 
 use crate::database::api;
 use crate::errors::{Error, MaintenanceError, NonUtf8PathError};
-use crate::{Client, File, FileStatus, GarbageCollector};
+use crate::{Client, File, FileStatus};
+
+mod cleaner;
+
+pub use cleaner::CacheCleaner;
 
 #[derive(Default, Builder, Debug)]
 #[builder(setter(into))]
@@ -72,7 +78,7 @@ impl<'c> MaintenanceRunner<'c> {
 
     /// Run cache cleaning: remove all expired cache entries.
     pub async fn run_cache_cleaning(&mut self) -> Result<(), MaintenanceError> {
-        let mut gc = GarbageCollector::new(self.client);
+        let mut gc = CacheCleaner::new(self.client);
         gc.run_once().await?;
         Ok(())
     }
