@@ -45,7 +45,9 @@ sha256 = "1.5"
 [dev-dependencies]
 http-test-server = "2"
 rand = "0.9"
+serde = { version = "1", features = ["derive"] }
 tempdir = "0.3"
 tokio-cron-scheduler = { version = "0.13", features = ["signal"] }
 tokio-test = "0.4"
 tracing-test = "0.2"
+warp = "0.3"
