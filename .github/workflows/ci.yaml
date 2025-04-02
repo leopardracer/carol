@@ -59,6 +59,9 @@ jobs:
         run: cargo check --locked
 
   run-tests:
+    # We had a couple of situations where tests got deadlocked because of bugs in async code.
+    # In order to avoid that we use '--ensure-time' option for tests.
+    # That's why we have to run tests with nightly toolchain
     name: Run tests
     runs-on: ubuntu-24.04
     steps:
@@ -67,9 +70,11 @@ jobs:
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: stable
+          toolchain: nightly
           default: true
       - name: Use Rust cache
         uses: Swatinem/rust-cache@v2
       - name: Run tests
-        run: cargo test --locked
+        env:
+          RUST_TEST_TIME_UNIT: "10000,60000"
+        run: cargo +nightly test --locked -- -Z unstable-options --ensure-time
