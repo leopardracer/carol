@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use chrono::Utc;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::database::api;
 use crate::errors::Error;
@@ -22,6 +22,7 @@ impl<'c> CacheCleaner<'c> {
 
     /// Run cache cleaning once.
     pub async fn run_once(&mut self) -> Result<(), Error> {
+        info!("running cache cleaner");
         self.schedule_for_removal().await?;
         self.remove().await?;
         Ok(())
@@ -49,8 +50,8 @@ impl<'c> CacheCleaner<'c> {
                     info!("URL '{}' scheduled for removal", file.url());
                 }
                 Err(err) => {
-                    warn!(
-                        "failed to schedule URL '{}' for removal: {}",
+                    error!(
+                        "failed to schedule URL '{}' for removal: {:?}",
                         file.url(),
                         err
                     );
@@ -62,6 +63,7 @@ impl<'c> CacheCleaner<'c> {
 
     /// Remove files with status `ToRemove`.
     pub async fn remove(&mut self) -> Result<(), Error> {
+        info!("removing files with 'ToRemove' status");
         let to_remove = api::filter_by_status(&mut self.client.db, FileStatus::ToRemove).await?;
         for entry in to_remove {
             match self.client.remove(&entry.url).await {
@@ -71,7 +73,7 @@ impl<'c> CacheCleaner<'c> {
                 Err(err) => {
                     // This may happened if the file was used after being scheduled for removal
                     // Its expiration timestamp may also have been updated
-                    info!("failed to remove URL '{}': {}", entry.url, err);
+                    error!("failed to remove URL '{}': {:?}", entry.url, err);
                 }
             }
         }
