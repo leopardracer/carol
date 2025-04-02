@@ -93,4 +93,19 @@ mod tests {
             .await
             .expect("remove example file");
     }
+
+    #[tokio::test]
+    async fn test_small_pool() {
+        let tmp_database = TempDir::new("carol.test.database").unwrap();
+        let database = tmp_database.path().join("carol.sqlite");
+        let database_path = database.as_os_str().to_str().unwrap().to_string();
+        let tmp_cache_dir = TempDir::new("carol.test.database").unwrap();
+
+        let mgr = PoolManager::new(&database_path, tmp_cache_dir.path());
+        let pool = Pool::builder(mgr).max_size(1).build().expect("build pool");
+        let client1 = pool.get().await.expect("get connection from pool");
+        drop(client1);
+        // Basically we check here that connection was succesfully recycled
+        let _client2 = pool.get().await.expect("get second connection from pool");
+    }
 }
