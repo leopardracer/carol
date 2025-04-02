@@ -40,7 +40,7 @@ jobs:
       - name: Use Rust cache
         uses: Swatinem/rust-cache@v2
       - name: Run linting
-        run: cargo clippy --locked --no-deps -- --deny warnings
+        run: cargo clippy --locked --no-deps --all-targets -- --deny warnings
 
   check-build:
     name: Check build
