@@ -128,8 +128,11 @@ impl Client {
         trace!("establishing cache database connection: {}", database_url);
         let db = database::establish_connection(database_url).await?;
 
-        if !cache_dir.as_ref().exists() {
-            fs::create_dir_all(cache_dir.as_ref()).await?;
+        // Database must store absolute paths for cached files,
+        // so this path will be stored as absolute.
+        let cache_dir = std::path::absolute(cache_dir)?;
+        if !cache_dir.exists() {
+            fs::create_dir_all(&cache_dir).await?;
         }
 
         let reqwest_client = ReqwestClient::builder()
@@ -137,7 +140,7 @@ impl Client {
             .map_err(Error::ReqwestClientBuildError)?;
 
         Ok(Self {
-            cache_dir: cache_dir.as_ref().to_path_buf(),
+            cache_dir,
             db,
             database_url: database_url.to_string(),
             default_duration: None,
