@@ -38,7 +38,7 @@ file.symlink(target).await.unwrap();
 // ...
 
 // "Free" file so it can be removed from cache later
-drop(file);
+file.release().await.unwrap();
 ```
 
 ## CLI example
