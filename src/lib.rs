@@ -75,16 +75,15 @@ mod client;
 mod database;
 mod file;
 mod garbage_collector;
-mod maintenance;
 
 pub mod errors;
 pub mod pool;
+pub mod maintenance;
 
 pub use client::{Client, ClientBuilder};
 pub use database::schema::FileStatus;
 pub use file::File;
 pub use garbage_collector::GarbageCollector;
-pub use maintenance::MaintenanceRunner;
 
 // Re-exports of public API arguments from extern crates
 #[doc(no_inline)]

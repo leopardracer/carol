@@ -1,9 +1,41 @@
+use derive_builder::Builder;
 use tokio::fs::{self, DirEntry};
 use tracing::{debug, error, info, warn};
 
 use crate::database::api;
 use crate::errors::{Error, MaintenanceError, NonUtf8PathError};
 use crate::{Client, File, FileStatus, GarbageCollector};
+
+#[derive(Default, Builder, Debug)]
+#[builder(setter(into))]
+pub struct MaintenanceOpts {
+    /// Run cache cleaning.
+    ///
+    /// Find expired cache entries and remove them.
+    /// Enables step [`MaintenanceRunner::run_cache_cleaning`].
+    run_cache_cleaning: bool,
+
+    /// Find corrupted cache entries.
+    ///
+    /// Search for cache entries with cache entry path which does not exist.
+    /// Enables step [`MaintenanceRunner::find_corrupted_cache_entries`].
+    find_corrupted: bool,
+
+    /// Remove corrupted cache entries.
+    ///
+    /// Search through database and remove files with [`FileStatus::Corrupted`] status.
+    /// Enables step [`MaintenanceRunner::remove_corrupted_entries`]
+    /// which will be executed after [`MaintenanceRunner::find_corrupted_cache_entries`]
+    /// if it is also enabled.
+    remove_corrupted: bool,
+
+    /// Remove dangling files from cache directory.
+    ///
+    /// Search for files which are no longer in the cache database
+    /// and remove them from cache directory.
+    /// Enables step [`MaintenanceRunner::prune_dangling_files`].
+    prune_dangling: bool,
+}
 
 /// Maintenance operations for Carol cache.
 ///
@@ -12,49 +44,34 @@ use crate::{Client, File, FileStatus, GarbageCollector};
 /// If runner is not able to solve the problem, it will produce a warning in logs.
 pub struct MaintenanceRunner<'c> {
     client: &'c mut Client,
-    gc: bool,
-    find_corrupted_entries: bool,
-    remove_corrupted: bool,
-    dangling_files: bool,
+    opts: MaintenanceOpts,
 }
 
 impl<'c> MaintenanceRunner<'c> {
     /// Create new maintenance runner.
-    pub fn new(
-        client: &'c mut Client,
-        gc: bool,
-        find_corrupted_entries: bool,
-        remove_corrupted: bool,
-        dangling_files: bool,
-    ) -> Self {
-        Self {
-            client,
-            gc,
-            find_corrupted_entries,
-            remove_corrupted,
-            dangling_files,
-        }
+    pub fn new(client: &'c mut Client, opts: MaintenanceOpts) -> Self {
+        Self { client, opts }
     }
 
     /// Run all configured maintenance steps once.
     pub async fn run_once(&mut self) -> Result<(), MaintenanceError> {
-        if self.find_corrupted_entries {
+        if self.opts.find_corrupted {
             self.find_corrupted_cache_entries().await?;
         }
-        if self.remove_corrupted {
+        if self.opts.remove_corrupted {
             self.remove_corrupted_entries().await?;
         }
-        if self.gc {
-            self.run_garbage_collection().await?;
+        if self.opts.run_cache_cleaning {
+            self.run_cache_cleaning().await?;
         }
-        if self.dangling_files {
+        if self.opts.prune_dangling {
             self.prune_dangling_files().await?;
         }
         Ok(())
     }
 
-    /// Run garbage collection: remove all expired cache entries.
-    pub async fn run_garbage_collection(&mut self) -> Result<(), MaintenanceError> {
+    /// Run cache cleaning: remove all expired cache entries.
+    pub async fn run_cache_cleaning(&mut self) -> Result<(), MaintenanceError> {
         let mut gc = GarbageCollector::new(self.client);
         gc.run_once().await?;
         Ok(())
@@ -165,3 +182,6 @@ impl<'c> MaintenanceRunner<'c> {
         Ok(())
     }
 }
+
+// TODO: Asynchronously handle files in maintenance runner.
+//       Right now we synchronously iterate over files, which is not efficient.
