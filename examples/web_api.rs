@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use carol::maintenance::{MaintenanceOptsBuilder, MaintenanceRunner};
+use carol::maintenance::{MaintenanceOpts, MaintenanceRunner};
 use carol::pool::{Pool, PoolManager};
 use carol::{Client, File, RetryPolicy};
 use tracing_subscriber::EnvFilter;
@@ -83,7 +83,7 @@ async fn run_maintenance(cache_pool: Pool, period: Duration) -> anyhow::Result<(
     // This may be changed in favor of clients pool in the future
     let mut client = cache_pool.get().await?;
 
-    let opts = MaintenanceOptsBuilder::default()
+    let opts = MaintenanceOpts::builder()
         .run_cache_cleaning(true)
         .find_corrupted(true)
         .remove_corrupted(true)

@@ -1,4 +1,36 @@
 //! Maintenance operations on cache.
+//!
+//! Maintenance provides options to automatically fix different issues in cache.
+//! These issues are not critical and the state of the cache is still valid,
+//! however such situations are usually undesired.
+//!
+//! E.g. if during remove of the file cache entry was removed, but the file for
+//! some reason was left in cache directory, [`MaintenanceRunner`] can automactically
+//! remove it.
+//!
+//! # Example
+//!
+//! ```rust
+//! # use carol::Client;
+//! # async fn test(client: &mut Client) {
+//! use carol::maintenance::{MaintenanceOpts, MaintenanceRunner};
+//!
+//! // Configure maintenance
+//! let opts = MaintenanceOpts::builder()
+//!     .run_cache_cleaning(true)
+//!     .find_corrupted(true)
+//!     .remove_corrupted(true)
+//!     .prune_dangling(true)
+//!     .build()
+//!     .unwrap();
+//!
+//! // Create runned
+//! let mut runner = MaintenanceRunner::new(client, opts);
+//!
+//! // Run all configured steps
+//! runner.run_once().await.unwrap();
+//! # }
+//! ```
 
 use derive_builder::Builder;
 use tokio::fs::{self, DirEntry};
@@ -12,6 +44,7 @@ mod cleaner;
 
 pub use cleaner::CacheCleaner;
 
+/// Maintenance options. Use [`MaintenanceOptsBuilder`] to create.
 #[derive(Default, Builder, Debug)]
 #[builder(setter(into))]
 pub struct MaintenanceOpts {
@@ -41,6 +74,13 @@ pub struct MaintenanceOpts {
     /// and remove them from cache directory.
     /// Enables step [`MaintenanceRunner::prune_dangling_files`].
     prune_dangling: bool,
+}
+
+impl MaintenanceOpts {
+    /// Create new builder for maintenance options.
+    pub fn builder() -> MaintenanceOptsBuilder {
+        MaintenanceOptsBuilder::default()
+    }
 }
 
 /// Maintenance operations for Carol cache.
