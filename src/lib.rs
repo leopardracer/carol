@@ -35,6 +35,8 @@
 //! **Warning:** when relying on automatic file release on drop you won't be able to handle the
 //! errors which may occur during decrementing reference counter. As a result, your file may
 //! be stuck in "used" state. So it is recommended to explicitly use [`File::release`].
+//! Also keep in mind that releasing on drop happens as a background task which means
+//! that right after drop the file still may be used for some period of time.
 //!
 //! ## Example
 //!

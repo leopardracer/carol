@@ -44,6 +44,11 @@ impl DatabaseError {
             ))
         )
     }
+
+    /// Whether the error is "not found".
+    pub fn is_not_found(&self) -> bool {
+        matches!(*self, DatabaseError::DieselError(DieselError::NotFound))
+    }
 }
 
 /// Carol client error.

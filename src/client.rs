@@ -293,6 +293,7 @@ impl Client {
         debug!("scheduling URL '{}' for removal", url.as_ref());
         if let Some(file) = self.find(url).await? {
             api::update_status(&mut self.db, file.id, FileStatus::ToRemove).await?;
+            file.release().await?;
         }
         Ok(())
     }
@@ -489,25 +490,34 @@ impl Client {
         }
     }
 
-    /// Wait until file becomes `Ready`.
+    /// Wait until file comes out of `Pending`.
     async fn wait_entry(&mut self, url: &str) -> Result<CacheEntry, Error> {
         debug!("awaiting URL: {}", url);
-        loop {
-            if let Some(entry) = api::get_by_url(&mut self.db, url).await? {
-                if entry.status == FileStatus::Ready {
-                    return Ok(entry);
-                } else {
-                    // file is still downloading, come back later
-                    time::sleep(Duration::from_secs(1)).await;
+        let maybe_id = api::get_by_url(&mut self.db, url)
+            .await?
+            .map(|entry| entry.id);
+
+        if let Some(id) = maybe_id {
+            loop {
+                match api::get_entry(&mut self.db, id).await {
+                    Ok(entry) if entry.status == FileStatus::Pending => {
+                        // file is still downloading, come back later
+                        time::sleep(Duration::from_secs(1)).await;
+                    }
+                    Ok(entry) => return Ok(entry),
+                    Err(err) if err.is_not_found() => {
+                        // If at some point entry dissapeared, it means that is was removed
+                        // There are two reasons for that:
+                        // - it was garbage collected (this is very unlikely to happened, so we will ignore this)
+                        // - downloading failed
+                        // So we will return downloading error here
+                        return Err(Error::AwaitingError);
+                    }
+                    Err(err) => return Err(err.into()),
                 }
-            } else {
-                // If at some point entry dissapeared, it means that is was removed
-                // There are two reasons for that:
-                // - it was garbage collected (this is very unlikely to happened, so we will ignore this)
-                // - downloading failed
-                // So we will return downloading error here
-                return Err(Error::AwaitingError);
             }
+        } else {
+            return Err(Error::UrlNotCached(url.to_string()));
         }
     }
 
@@ -516,6 +526,10 @@ impl Client {
         File::from_entry(entry, self.database_url.clone())
     }
 }
+
+// TODO: Most of the method implementations abuse lock/release system of files,
+//       which results into a lot of unneccessary database connections.
+//       It would be nice to re-write implementations without the use of `File`-s.
 
 impl fmt::Debug for Client {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -756,6 +770,38 @@ mod tests {
             )))
         ));
         file.release().await.unwrap();
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_set_expires() {
+        let fixture = ClientFixture::new().await.unwrap();
+        let mut client = fixture.client;
+        let url = format!("{}/file.txt", &fixture.host);
+        client.get(&url).await.unwrap();
+        client
+            .set_expires(&url, DateTime::<Utc>::MAX_UTC)
+            .await
+            .expect("set expiration timestamp");
+        let file = client.get(&url).await.unwrap();
+        let expires_at = file.expires().await.expect("get expiration timestamp");
+        assert_eq!(expires_at, Some(DateTime::<Utc>::MAX_UTC));
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_schedule_for_removal() {
+        let fixture = ClientFixture::new().await.unwrap();
+        let mut client = fixture.client;
+        let url = format!("{}/file.txt", &fixture.host);
+        client.get(&url).await.unwrap();
+        client
+            .schedule_for_removal(&url)
+            .await
+            .expect("schedule URL for removal");
+        let file = client.get(&url).await.unwrap();
+        let status = file.status().await.expect("get file status");
+        assert_eq!(status, FileStatus::ToRemove);
     }
 
     #[tokio::test]
