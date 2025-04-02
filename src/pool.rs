@@ -20,29 +20,31 @@
 //! # }
 //! ```
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use deadpool::managed;
 
 use crate::errors::Error;
-use crate::Client;
+use crate::{Client, ClientBuilder};
 
-/// Manager of pool of Carol clients.
+/// Manager responsible for creating new Carol clients.
 pub struct PoolManager {
-    cache_dir: PathBuf,
-    database_url: String,
+    builder: ClientBuilder,
 }
 
 impl PoolManager {
-    /// Create new manager.
+    /// Create new manager which will create default client.
     pub fn new<P>(database_url: &str, cache_dir: P) -> Self
     where
         P: AsRef<Path>,
     {
-        Self {
-            cache_dir: cache_dir.as_ref().to_path_buf(),
-            database_url: database_url.to_string(),
-        }
+        let builder = ClientBuilder::new(database_url, cache_dir);
+        Self::from_client_builder(builder)
+    }
+
+    /// Create new manager which will create configured clients.
+    pub fn from_client_builder(builder: ClientBuilder) -> Self {
+        Self { builder }
     }
 }
 
@@ -51,7 +53,7 @@ impl managed::Manager for PoolManager {
     type Error = Error;
 
     async fn create(&self) -> Result<Client, Error> {
-        Client::init(&self.database_url, &self.cache_dir).await
+        self.builder.clone().build().await
     }
 
     async fn recycle(&self, _: &mut Client, _: &managed::Metrics) -> managed::RecycleResult<Error> {
