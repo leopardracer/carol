@@ -30,11 +30,17 @@ const MAINTENANCE_PERIOD: Duration = Duration::from_secs(60);
 ///   "files": [
 ///     {
 ///       "url": "http://example.com",
-///       "cache_path": "web-api.carol.files/f0e6a6a97042a4f1f1c87f5f7d44315b2d852c2df5c7991cc66241bf7072d1c4",
+///       "cache_path": "/home/user/carol/web-api.carol.files/f0e6a6a97042a4f1f1c87f5f7d44315b2d852c2df5c7991cc66241bf7072d1c4",
 ///       "created": "2025-04-02T16:15:08.714973713Z"
 ///     }
 ///   ]
 /// }
+/// ```
+///
+/// Run and test with cURL:
+///
+/// ```shell
+/// curl -X POST http://127.0.0.1:8080/api -H "Content-Type: application/json" -d '{"urls": ["http://example.com"]}'
 /// ```
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
