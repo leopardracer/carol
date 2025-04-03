@@ -14,6 +14,9 @@ use crate::database::{self, api, Connection};
 use crate::errors::{Error, NonUtf8PathError};
 use crate::{DateTime, File, FileStatus, RetryPolicy, Utc};
 
+type StdResult<T, E> = std::result::Result<T, E>;
+type Result<T> = StdResult<T, Error>;
+
 /// Used to create precisely configured [`Client`].
 #[must_use]
 #[derive(Clone, Debug, Default)]
@@ -70,7 +73,7 @@ impl ClientBuilder {
     /// # Errors
     ///
     /// Returns error if client initialization fails.
-    pub async fn build(self) -> Result<Client, Error> {
+    pub async fn build(self) -> Result<Client> {
         let mut client = Client::init(&self.database_url, &self.cache_dir).await?;
         if let Some(reqwest_client) = self.reqwest_client {
             client.reqwest_client = reqwest_client;
@@ -118,7 +121,7 @@ impl Client {
     /// Initialize Carol client.
     ///
     /// Initializes cache directory and database if they don't exist.
-    pub async fn init<P>(database_url: &str, cache_dir: P) -> Result<Self, Error>
+    pub async fn init<P>(database_url: &str, cache_dir: P) -> Result<Self>
     where
         P: AsRef<Path>,
     {
@@ -152,7 +155,7 @@ impl Client {
     /// Download the file from URL into cache.
     ///
     /// If the file is already cached, it won't be re-downloaded.
-    pub async fn get<T>(&mut self, url: T) -> Result<File, Error>
+    pub async fn get<T>(&mut self, url: T) -> Result<File>
     where
         T: AsRef<str>,
     {
@@ -169,16 +172,13 @@ impl Client {
         )
         .await;
 
-        match result {
+        let entry = match result {
             Ok(entry) => {
                 // File was not in cache, so let's download it
                 debug!("cache miss: {:?}", entry);
-                let result = self
-                    .fetch_entry(&entry)
-                    .await
-                    .map(|entry| self.to_file(entry));
-                let mut file = match result {
-                    Ok(file) => file,
+                let result = self.fetch_entry(&entry).await;
+                match result {
+                    Ok(entry) => entry,
                     Err(err) => match self.download_retry_policy {
                         RetryPolicy::None => return Err(err),
                         RetryPolicy::Fixed { number, period } => {
@@ -188,13 +188,9 @@ impl Client {
                             for i in 0..number {
                                 time::sleep(period).await;
                                 debug!("retrying fetch URL '{}', attempt #{}", entry.url, i + 1);
-                                match self
-                                    .fetch_entry(&entry)
-                                    .await
-                                    .map(|entry| self.to_file(entry))
-                                {
-                                    Ok(file) => {
-                                        result = Ok(file);
+                                match self.fetch_entry(&entry).await {
+                                    Ok(entry) => {
+                                        result = Ok(entry);
                                         break;
                                     }
                                     Err(err) => result = Err(err),
@@ -205,53 +201,46 @@ impl Client {
                             result?
                         }
                     },
-                };
-                // At this point file was downloaded and stored in cache
-                // If this function fails, it means that we only failed
-                // to increment the reference counter. So it is safe
-                // to just return an error here and let user call `get()` again.
-                file.lock().await?;
-                Ok(file)
+                }
             }
             Err(err) if err.is_unique_violation() => {
                 // File is already in cache
                 debug!("cache hit: {}", url);
-                let mut file = self
-                    .wait_entry(url)
-                    .await
-                    .map(|entry| self.to_file(entry))?;
-                // See comment above about the error in reference counter increment.
-                file.lock().await?;
-                Ok(file)
+                self.wait_entry(url).await?
             }
-            Err(err) => Err(err.into()),
-        }
+            Err(err) => return Err(err.into()),
+        };
+
+        // At this point file was downloaded and stored in cache
+        // If this function fails, it means that we only failed
+        // to increment the reference counter. So it is safe
+        // to just return an error here and let user call `get()` again.
+        self.create_locked_file(entry).await
     }
 
     /// Find file by URL in cache. Returns `None` is URL is not cached.
-    pub async fn find<T>(&mut self, url: T) -> Result<Option<File>, Error>
+    pub async fn find<T>(&mut self, url: T) -> Result<Option<File>>
     where
         T: AsRef<str>,
     {
         debug!("lookup URL '{}'", url.as_ref());
-        let mut file = api::get_by_url(&mut self.db, url.as_ref())
-            .await
-            .map(|res| res.map(|entry| self.to_file(entry)))?;
-        if let Some(file) = &mut file {
-            file.lock().await?;
-        }
-        Ok(file)
+        let maybe_entry = api::get_by_url(&mut self.db, url.as_ref()).await?;
+        Ok(if let Some(entry) = maybe_entry {
+            Some(self.create_locked_file(entry).await?)
+        } else {
+            None
+        })
     }
 
     /// Set expiration timestamp for URL.
     ///
     /// Returns error if URL is not cached.
-    pub async fn set_expires<T>(&mut self, url: T, expires_at: DateTime<Utc>) -> Result<(), Error>
+    pub async fn set_expires<T>(&mut self, url: T, expires_at: DateTime<Utc>) -> Result<()>
     where
         T: AsRef<str>,
     {
-        if let Some(file) = self.find(url.as_ref()).await? {
-            api::update_expires(&mut self.db, file.id, Some(expires_at)).await?;
+        if let Some(entry) = api::get_by_url(&mut self.db, url.as_ref()).await? {
+            api::update_expires(&mut self.db, entry.id, Some(expires_at)).await?;
             Ok(())
         } else {
             Err(Error::UrlNotCached(url.as_ref().to_string()))
@@ -261,7 +250,7 @@ impl Client {
     /// Remove URL from cache.
     ///
     /// Does nothing if the URL is not cached.
-    pub async fn remove<T>(&mut self, url: T) -> Result<(), Error>
+    pub async fn remove<T>(&mut self, url: T) -> Result<()>
     where
         T: AsRef<str>,
     {
@@ -270,18 +259,14 @@ impl Client {
         // File can be safely removed later.
         self.schedule_for_removal(&url).await?;
 
-        if let Some(file) = self.find(url).await? {
-            let id = file.id;
-            let cache_path = file.cache_path().to_path_buf();
-            file.release().await?;
-
+        if let Some(entry) = api::get_by_url(&mut self.db, url.as_ref()).await? {
             // If this fails, the file will still be marked as `ToRemove`,
             // so it will be garbage collected later.
-            api::remove_entry(&mut self.db, id).await?;
+            api::remove_entry(&mut self.db, entry.id).await?;
 
             // If this fails, we will have a dangling file in cache directory,
             // which will be removed later on maintenance.
-            fs::remove_file(cache_path).await?;
+            fs::remove_file(entry.cache_path).await?;
         }
         Ok(())
     }
@@ -289,14 +274,13 @@ impl Client {
     /// Schedule URL for removal (set its status to [`FileStatus::ToRemove`]).
     ///
     /// Does nothing if the URL is not cached.
-    pub async fn schedule_for_removal<T>(&mut self, url: T) -> Result<(), Error>
+    pub async fn schedule_for_removal<T>(&mut self, url: T) -> Result<()>
     where
         T: AsRef<str>,
     {
         debug!("scheduling URL '{}' for removal", url.as_ref());
-        if let Some(file) = self.find(url).await? {
-            api::update_status(&mut self.db, file.id, FileStatus::ToRemove).await?;
-            file.release().await?;
+        if let Some(entry) = api::get_by_url(&mut self.db, url.as_ref()).await? {
+            api::update_status(&mut self.db, entry.id, FileStatus::ToRemove).await?;
         }
         Ok(())
     }
@@ -310,31 +294,28 @@ impl Client {
     /// # Safety
     ///
     /// User must ensure the file is not used and schedule it for removal first.
-    pub async unsafe fn remove_unsafe<T>(&mut self, url: T) -> Result<(), Error>
+    pub async unsafe fn remove_unsafe<T>(&mut self, url: T) -> Result<()>
     where
         T: AsRef<str>,
     {
-        if let Some(file) = self.find(url).await? {
+        if let Some(entry) = api::get_by_url(&mut self.db, url.as_ref()).await? {
             // Since this is unsafe method, calling it may lead to invalid cache state
-            api::delete_unsafe(&mut self.db, file.id).await?;
-            fs::remove_file(file.cache_path()).await?;
+            api::delete_unsafe(&mut self.db, entry.id).await?;
+            fs::remove_file(entry.cache_path).await?;
         }
         Ok(())
     }
 
     /// List all cache entries.
-    pub async fn list(&mut self) -> Result<Vec<File>, Error> {
-        let mut files = api::get_all(&mut self.db).await.map(|res| {
-            res.into_iter()
-                .map(|entry| self.to_file(entry))
-                .collect::<Vec<_>>()
-        })?;
-
+    pub async fn list(&mut self) -> Result<Vec<File>> {
+        let entries = api::get_all(&mut self.db)
+            .await
+            .map(|res| res.into_iter().collect::<Vec<_>>())?;
+        let mut files = Vec::new();
         // TODO: iterate files asynchronously
-        for file in files.iter_mut() {
-            file.lock().await?;
+        for entry in entries {
+            files.push(self.create_locked_file(entry).await?);
         }
-
         Ok(files)
     }
 
@@ -348,13 +329,12 @@ impl Client {
     ///
     /// - URL is not cached
     /// - File is used at the moment
-    pub async fn update<T>(&mut self, url: T) -> Result<File, Error>
+    pub async fn update<T>(&mut self, url: T) -> Result<File>
     where
         T: AsRef<str>,
     {
         debug!("updating URL '{}'", url.as_ref());
-        if let Some(file) = self.find(url.as_ref()).await? {
-            file.release().await?;
+        if api::get_by_url(&mut self.db, url.as_ref()).await?.is_some() {
             self.remove(url.as_ref()).await?;
             self.get(url.as_ref()).await
         } else {
@@ -379,21 +359,19 @@ impl Client {
     ///
     /// - URL is not cached
     /// - Timeout is exceeded
-    pub async fn wait_url_released<T>(&mut self, url: T, timeout: Duration) -> Result<(), Error>
+    pub async fn wait_url_released<T>(&mut self, url: T, timeout: Duration) -> Result<()>
     where
         T: AsRef<str>,
     {
         const PERIOD: Duration = Duration::from_secs(1);
 
         debug!("waiting URL '{}' to become free", url.as_ref());
-        if let Some(file) = self.find(url.as_ref()).await? {
-            let id = file.id;
-            file.release().await?;
-
-            let mut inner = async || -> Result<(), Error> {
+        if let Some(entry) = api::get_by_url(&mut self.db, url.as_ref()).await? {
+            let mut inner = async || -> Result<()> {
                 loop {
-                    let entry = api::get_entry(&mut self.db, id).await?;
+                    let entry = api::get_entry(&mut self.db, entry.id).await?;
                     if entry.ref_count == 0 {
+                        debug!("URL '{}' is free", url.as_ref());
                         break;
                     } else {
                         // file is still used, come back later
@@ -414,10 +392,10 @@ impl Client {
 
     /// Query entry URL and store response body in target file. Then update entry status.
     /// If anything fails during this process, clean-up trimmed file and cache entry.
-    async fn fetch_entry(&mut self, entry: &CacheEntry) -> Result<CacheEntry, Error> {
+    async fn fetch_entry(&mut self, entry: &CacheEntry) -> Result<CacheEntry> {
         let mut file = fs::File::create_new(&entry.cache_path).await?;
 
-        let mut fetch = async || -> Result<CacheEntry, Error> {
+        let mut fetch = async || -> Result<CacheEntry> {
             trace!("fetching {}", &entry.url);
             let response = self
                 .reqwest_client
@@ -494,7 +472,7 @@ impl Client {
     }
 
     /// Wait until file comes out of `Pending`.
-    async fn wait_entry(&mut self, url: &str) -> Result<CacheEntry, Error> {
+    async fn wait_entry(&mut self, url: &str) -> Result<CacheEntry> {
         debug!("awaiting URL: {}", url);
         let maybe_id = api::get_by_url(&mut self.db, url)
             .await?
@@ -524,9 +502,12 @@ impl Client {
         }
     }
 
-    /// Append database URL to cache entry.
-    fn to_file(&self, entry: CacheEntry) -> File {
-        File::from_entry(entry, self.database_url.clone())
+    /// Pair database URL with cache entry, create [`File`] and increment its reference counter.
+    async fn create_locked_file(&mut self, entry: CacheEntry) -> Result<File> {
+        let mut file = File::from_entry(entry, self.database_url.clone());
+        api::increment_ref(&mut self.db, file.id).await?;
+        file.released = false;
+        Ok(file)
     }
 }
 

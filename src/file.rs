@@ -17,7 +17,10 @@ pub struct File {
     database_url: String,
 
     /// Whether the file was released or not.
-    released: bool,
+    ///
+    /// Needed for automatic release on drop only
+    /// to avoid database connection for already released files.
+    pub(crate) released: bool,
 
     /// Primary key of the file in database.
     pub(crate) id: i32,
@@ -103,16 +106,6 @@ impl File {
         fs::symlink(&self.cache_path, path)
             .await
             .map_err(Into::into)
-    }
-
-    /// Increment files reference counter.
-    /// When reference counter is > 0, the file will not be removed.
-    pub(crate) async fn lock(&mut self) -> Result<(), Error> {
-        trace!("locking file {:?}", self);
-        let mut connection = database::establish_connection(&self.database_url).await?;
-        api::increment_ref(&mut connection, self.id).await?;
-        self.released = false;
-        Ok(())
     }
 
     /// Decrement files reference counter.
