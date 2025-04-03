@@ -32,6 +32,8 @@
 //! # }
 //! ```
 
+use std::path::Path;
+
 use derive_builder::Builder;
 use tokio::fs::{self, DirEntry};
 use tracing::{debug, error, info, warn};
@@ -147,13 +149,28 @@ impl<'c> MaintenanceRunner<'c> {
             .map_err(Error::from)?;
         info!("corrupted entries: {}", corrupted.len());
         for entry in corrupted {
-            // FIXME: we can't use client.remove() here cause it will always fails
-            // because file is already missing
-            if let Err(err) = self.client.remove(&entry.url).await {
+            if let Err(err) = self.client.schedule_for_removal(&entry.url).await {
                 error!(
-                    "failed to remove corrupted file (URL '{}'): {:?}",
+                    "failed to schedule corrupted entry for removal (URL '{}'): {:?}",
                     &entry.url, err
                 );
+                continue;
+            }
+
+            if let Err(err) = api::remove_entry(&mut self.client.db, entry.id).await {
+                error!(
+                    "failed to remove corrupted cache entry (URL '{}'): {:?}",
+                    &entry.url, err
+                );
+            }
+
+            if Path::new(&entry.cache_path).exists() {
+                if let Err(err) = fs::remove_file(&entry.cache_path).await {
+                    error!(
+                        "failed to remove corrupted file (URL '{}'): {:?}",
+                        &entry.url, err
+                    );
+                }
             }
         }
         Ok(())

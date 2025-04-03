@@ -63,6 +63,7 @@ impl<'c> CacheCleaner<'c> {
     pub async fn remove(&mut self) -> Result<(), Error> {
         info!("removing files with 'ToRemove' status");
         let to_remove = api::filter_by_status(&mut self.client.db, FileStatus::ToRemove).await?;
+        info!("files to remove: {}", to_remove.len());
         for entry in to_remove {
             match self.client.remove(&entry.url).await {
                 Ok(_) => {
