@@ -221,7 +221,7 @@ pub async fn update_status(
             async {
                 let row = crate::database::schema::files::dsl::files.find(pk);
                 let assignment = crate::database::schema::files::dsl::status.eq(status);
-                trace!("UPDATE pk: {}, status = {:?}", pk, status);
+                trace!("UPDATE pk={}, status = {:?}", pk, status);
                 diesel::update(row).set(assignment).get_result(conn).await
             }
             .scope_boxed()
@@ -237,12 +237,11 @@ pub async fn increment_ref(connection: &mut Connection, pk: i32) -> DatabaseResu
             async {
                 let row = crate::database::schema::files::dsl::files.find(pk);
                 use crate::database::schema::files::dsl::ref_count;
-                trace!("UPDATE pk: {}, increment ref count", pk);
                 let entry: CacheEntry = diesel::update(row)
                     .set(ref_count.eq(ref_count + 1))
                     .get_result(conn)
                     .await?;
-                trace!("RESULT pk: {} ref count = {}", pk, entry.ref_count);
+                trace!("UPDATE pk={}, ref count = {}", pk, entry.ref_count);
                 Ok::<CacheEntry, DatabaseError>(entry)
             }
             .scope_boxed()
@@ -257,12 +256,11 @@ pub async fn decrement_ref(connection: &mut Connection, pk: i32) -> DatabaseResu
             async {
                 let row = crate::database::schema::files::dsl::files.find(pk);
                 use crate::database::schema::files::dsl::ref_count;
-                trace!("UPDATE pk: {}, decrement ref count", pk);
                 let entry: CacheEntry = diesel::update(row)
                     .set(ref_count.eq(ref_count - 1))
                     .get_result(conn)
                     .await?;
-                trace!("RESULT pk: {} ref count = {}", pk, entry.ref_count);
+                trace!("UPDATE pk={}, ref count = {}", pk, entry.ref_count);
                 Ok::<CacheEntry, DatabaseError>(entry)
             }
             .scope_boxed()

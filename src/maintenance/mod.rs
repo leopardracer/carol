@@ -147,9 +147,11 @@ impl<'c> MaintenanceRunner<'c> {
             .map_err(Error::from)?;
         info!("corrupted entries: {}", corrupted.len());
         for entry in corrupted {
+            // FIXME: we can't use client.remove() here cause it will always fails
+            // because file is already missing
             if let Err(err) = self.client.remove(&entry.url).await {
                 error!(
-                    "failed to remove corrupted file (URL '{}'): {}",
+                    "failed to remove corrupted file (URL '{}'): {:?}",
                     &entry.url, err
                 );
             }
