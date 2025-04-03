@@ -99,7 +99,9 @@ async fn run_maintenance(cache_pool: Pool, period: Duration) -> anyhow::Result<(
 
     loop {
         tokio::time::sleep(period).await;
-        runner.run_once().await?;
+        if let Err(err) = runner.run_once().await {
+            eprintln!("Error during maintenance run: {:?}", err);
+        }
     }
 }
 
