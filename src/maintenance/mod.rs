@@ -49,6 +49,7 @@ pub use cleaner::CacheCleaner;
 /// Maintenance options. Use [`MaintenanceOptsBuilder`] to create.
 #[derive(Default, Builder, Debug)]
 #[builder(setter(into))]
+#[builder(default)]
 pub struct MaintenanceOpts {
     /// Run cache cleaning.
     ///
@@ -250,3 +251,62 @@ impl<'c> MaintenanceRunner<'c> {
 
 // TODO: Asynchronously handle files in maintenance runner.
 //       Right now we synchronously iterate over files, which is not efficient.
+
+#[cfg(test)]
+mod tests {
+    use super::{MaintenanceOpts, MaintenanceRunner};
+    use crate::client::fixtures::{cache_with_file, CacheWithFileFixture, DEFAULT_URL};
+    use crate::client::Client;
+    use crate::database::api;
+    use crate::FileStatus;
+    use rstest::rstest;
+    use tokio::fs;
+    use tracing::trace;
+    use tracing_test::traced_test;
+
+    fn get_runner(client: &mut Client) -> MaintenanceRunner {
+        MaintenanceRunner::new(client, MaintenanceOpts::builder().build().unwrap())
+    }
+
+    #[rstest]
+    #[tokio::test]
+    #[traced_test]
+    #[awt]
+    async fn test_find_corrupted_cache_entries(#[future] cache_with_file: CacheWithFileFixture) {
+        trace!("begin test");
+        let (mut cache, entry) = cache_with_file;
+        let mut runner = get_runner(&mut cache.client);
+
+        fs::remove_file(&entry.cache_path).await.unwrap();
+
+        runner
+            .find_corrupted_cache_entries()
+            .await
+            .expect("find corrupted cache entries");
+
+        let entry = api::get_entry(&mut cache.db.conn, entry.id).await.unwrap();
+        assert_eq!(entry.status, FileStatus::Corrupted);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    #[traced_test]
+    #[awt]
+    async fn test_remove_corrupted_cache_entries(
+        #[future]
+        #[with(DEFAULT_URL, FileStatus::Corrupted)]
+        cache_with_file: CacheWithFileFixture,
+    ) {
+        trace!("begin test");
+        let (mut cache, _) = cache_with_file;
+        let mut runner = get_runner(&mut cache.client);
+
+        runner
+            .remove_corrupted_entries()
+            .await
+            .expect("remove corrupted cache entries");
+
+        let entrirs = api::get_all(&mut cache.db.conn).await.unwrap();
+        assert!(entrirs.is_empty());
+    }
+}
