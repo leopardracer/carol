@@ -73,17 +73,19 @@
 //! *Coming soon...*
 //!
 
+mod cache_policy;
 mod client;
 mod database;
 mod file;
 
 pub mod errors;
 pub mod maintenance;
+#[cfg(feature = "pool")]
 pub mod pool;
 
+pub use cache_policy::CachePolicy;
 pub use client::{Client, ClientBuilder};
-pub use database::schema::FileStatus;
-pub use file::File;
+pub use file::{File, FileStatus};
 
 // Re-exports of public API arguments from extern crates
 #[doc(no_inline)]

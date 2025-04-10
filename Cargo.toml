@@ -8,7 +8,9 @@ license = "MIT OR Apache-2.0"
 rust-version = "1.85"
 
 [features]
-default = []
+default = ["pool"]
+
+pool = ["dep:deadpool"]
 
 # Enables database stress-testing while running `cargo test`
 # Doesn't affect the library itself
@@ -18,7 +20,7 @@ stresstest = []
 anyhow = "1"
 clap = { version = "4", features = ["derive", "string"] }
 chrono = { version = "0.4", features = ["serde"] }
-deadpool = "0.12"
+deadpool = { version = "0.12", optional = true }
 derive_builder = "0.20"
 directories = "6"
 diesel = { version = "2", features = [
@@ -42,12 +44,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std"] }
 tokio-stream = "0.1"
 sha256 = "1.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [dev-dependencies]
 http-test-server = "2"
 rand = "0.9"
 rstest = "0.25"
-serde = { version = "1", features = ["derive"] }
 tempfile = "3"
 tokio-cron-scheduler = { version = "0.13", features = ["signal"] }
 tokio-test = "0.4"

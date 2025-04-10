@@ -3,7 +3,7 @@ use tracing::{error, info};
 
 use crate::database::api;
 use crate::errors::Error;
-use crate::{Client, FileStatus};
+use crate::{CachePolicy, Client, FileStatus};
 
 /// Cache cleaner.
 ///
@@ -34,9 +34,25 @@ impl<'c> CacheCleaner<'c> {
 
         let mut to_remove = vec![];
         for file in files.into_iter() {
-            if let Some(ts) = file.expires().await? {
-                if ts < now {
-                    to_remove.push(file);
+            match file.cache_policy() {
+                CachePolicy::None => {
+                    // do nothing
+                }
+                CachePolicy::ExpiresAt { timestamp } => {
+                    if timestamp < now {
+                        to_remove.push(file);
+                    }
+                }
+                CachePolicy::ExpiresAfter { duration } => {
+                    if *file.created() + duration < now {
+                        to_remove.push(file);
+                    }
+                }
+                CachePolicy::ExpiresAfterNotUsedFor { duration } => {
+                    let last_used = file.last_used().await?;
+                    if last_used + duration < now {
+                        to_remove.push(file);
+                    }
                 }
             }
         }
@@ -99,7 +115,7 @@ mod tests {
     #[awt]
     async fn test_schedule_for_removal(
         #[future]
-        #[with(DEFAULT_URL, FileStatus::Ready, Some(DateTime::<Utc>::MIN_UTC))]
+        #[with(DEFAULT_URL, FileStatus::Ready, CachePolicy::at(DateTime::<Utc>::MIN_UTC))]
         cache_with_file: CacheWithFileFixture,
     ) {
         trace!("begin test");
@@ -145,7 +161,7 @@ mod tests {
     #[awt]
     async fn test_run_once(
         #[future]
-        #[with(DEFAULT_URL, FileStatus::Ready, Some(DateTime::<Utc>::MIN_UTC))]
+        #[with(DEFAULT_URL, FileStatus::Ready, CachePolicy::at(DateTime::<Utc>::MIN_UTC))]
         cache_with_file: CacheWithFileFixture,
     ) {
         trace!("begin test");

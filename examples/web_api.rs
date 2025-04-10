@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use carol::maintenance::{MaintenanceOpts, MaintenanceRunner};
 use carol::pool::{Pool, PoolManager};
-use carol::{Client, File, RetryPolicy};
+use carol::{CachePolicy, Client, File, RetryPolicy};
 use tracing_subscriber::EnvFilter;
 use warp::Filter;
 
@@ -52,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
     // This client builder will be used in our clients pool
     let mut client_builder = Client::builder(DATABASE_URL, CACHE_DIR);
     client_builder
-        .default_file_duration(Duration::from_secs(30))
+        .cache_policy(CachePolicy::after(Duration::from_secs(30)))
         .download_retry_policy(RetryPolicy::Fixed {
             number: 3,
             period: Duration::from_secs(1),

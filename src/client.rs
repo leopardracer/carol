@@ -12,7 +12,7 @@ use tracing::{debug, trace};
 use crate::database::models::CacheEntry;
 use crate::database::{self, api, Connection};
 use crate::errors::{CleanUpError, DatabaseError, Error, NonUtf8PathError};
-use crate::{DateTime, File, FileStatus, RetryPolicy, Utc};
+use crate::{CachePolicy, File, FileStatus, RetryPolicy};
 
 type StdResult<T, E> = std::result::Result<T, E>;
 type Result<T> = StdResult<T, Error>;
@@ -24,7 +24,7 @@ pub struct ClientBuilder {
     cache_dir: PathBuf,
     database_url: String,
     reqwest_client: Option<ReqwestClient>,
-    default_file_duration: Option<Duration>,
+    cache_policy: CachePolicy,
     download_retry_policy: RetryPolicy,
 }
 
@@ -49,13 +49,11 @@ impl ClientBuilder {
         self
     }
 
-    /// Set default file duration.
+    /// Set cache policy.
     ///
-    /// `duration` will be added to [`Utc::now()`] and set as an expiration timestamp when
-    /// downloading a file. If not set, new files won't have any expiration timestamp and
-    /// will never expire.
-    pub fn default_file_duration(&mut self, duration: Duration) -> &mut Self {
-        self.default_file_duration = Some(duration);
+    /// If not set, default cache policy will be used.
+    pub fn cache_policy(&mut self, policy: CachePolicy) -> &mut Self {
+        self.cache_policy = policy;
         self
     }
 
@@ -78,7 +76,7 @@ impl ClientBuilder {
         if let Some(reqwest_client) = self.reqwest_client {
             client.reqwest_client = reqwest_client;
         }
-        client.default_duration = self.default_file_duration;
+        client.cache_policy = self.cache_policy;
         client.download_retry_policy = self.download_retry_policy;
         Ok(client)
     }
@@ -105,7 +103,7 @@ pub struct Client {
     database_url: String,
 
     reqwest_client: ReqwestClient,
-    default_duration: Option<Duration>,
+    cache_policy: CachePolicy,
     download_retry_policy: RetryPolicy,
 }
 
@@ -146,7 +144,7 @@ impl Client {
             cache_dir,
             db,
             database_url: database_url.to_string(),
-            default_duration: None,
+            cache_policy: CachePolicy::None,
             reqwest_client,
             download_retry_policy: RetryPolicy::None,
         })
@@ -168,7 +166,7 @@ impl Client {
             &mut self.db,
             url,
             cache_path.to_str().ok_or(NonUtf8PathError)?,
-            self.default_duration.map(|period| Utc::now() + period),
+            self.cache_policy.into(),
         )
         .await;
 
@@ -223,21 +221,6 @@ impl Client {
         } else {
             None
         })
-    }
-
-    /// Set expiration timestamp for URL.
-    ///
-    /// Returns error if URL is not cached.
-    pub async fn set_expires<T>(&mut self, url: T, expires_at: DateTime<Utc>) -> Result<()>
-    where
-        T: AsRef<str>,
-    {
-        if let Some(entry) = api::get_by_url(&mut self.db, url.as_ref()).await? {
-            api::update_expires(&mut self.db, entry.id, Some(expires_at)).await?;
-            Ok(())
-        } else {
-            Err(Error::UrlNotCached(url.as_ref().to_string()))
-        }
     }
 
     /// Remove URL from cache.
@@ -471,7 +454,7 @@ impl Client {
         if let Some(id) = maybe_id {
             loop {
                 match api::get_entry(&mut self.db, id).await {
-                    Ok(entry) if entry.status == FileStatus::Pending => {
+                    Ok(entry) if entry.status.0 == FileStatus::Pending => {
                         // file is still downloading, come back later
                         time::sleep(Duration::from_secs(1)).await;
                     }
@@ -510,7 +493,7 @@ impl fmt::Debug for Client {
         f.debug_struct("Client")
             .field("cache_dir", &self.cache_dir)
             .field("database_url", &self.database_url)
-            .field("default_duration", &self.default_duration)
+            .field("expire_policy", &self.cache_policy)
             .field("reqwest_client", &self.reqwest_client)
             .finish()
     }
@@ -523,12 +506,10 @@ pub(crate) mod fixtures {
     use super::ReqwestClient;
     use crate::database::fixtures::{database, CacheDatabaseFixture};
     use crate::database::models::{CacheEntry, NewCacheEntry};
-    use crate::{Client, RetryPolicy};
-    use crate::{DateTime, FileStatus, Utc};
+    use crate::{CachePolicy, Client, FileStatus, RetryPolicy, Utc};
     use http_test_server::http::{Method, Status};
     use http_test_server::TestServer;
     use rstest::fixture;
-    use std::time::Duration;
     use tempfile::TempDir;
     use tokio::fs;
     use tracing::trace;
@@ -568,15 +549,13 @@ pub(crate) mod fixtures {
         pub async fn new(
             db: CacheDatabaseFixture,
             retry_policy: RetryPolicy,
-            file_duration: Option<Duration>,
+            cache_policy: CachePolicy,
             reqwest_client: Option<ReqwestClient>,
         ) -> Self {
             trace!("creating CacheFixture");
             let cache_dir = tempfile::tempdir().unwrap();
             let mut client_builder = Client::builder(&db.db_path, cache_dir.path());
-            if let Some(duration) = file_duration {
-                client_builder.default_file_duration(duration);
-            }
+            client_builder.cache_policy(cache_policy);
             if let Some(client) = reqwest_client {
                 client_builder.reqwest_client(client);
             }
@@ -598,12 +577,12 @@ pub(crate) mod fixtures {
     #[fixture]
     #[awt]
     pub async fn cache(
-        #[default(RetryPolicy::None)] retry_policy: RetryPolicy,
-        #[default(None)] file_duration: Option<Duration>,
+        #[default(RetryPolicy::default())] retry_policy: RetryPolicy,
+        #[default(CachePolicy::default())] cache_policy: CachePolicy,
         #[default(None)] reqwest_client: Option<ReqwestClient>,
         #[future] database: CacheDatabaseFixture,
     ) -> CacheFixture {
-        CacheFixture::new(database, retry_policy, file_duration, reqwest_client).await
+        CacheFixture::new(database, retry_policy, cache_policy, reqwest_client).await
     }
 
     pub type CacheWithFileFixture = (CacheFixture, CacheEntry);
@@ -614,20 +593,20 @@ pub(crate) mod fixtures {
     pub async fn cache_with_file(
         #[default(DEFAULT_URL)] url: impl AsRef<str>,
         #[default(FileStatus::Ready)] status: FileStatus,
-        #[default(None)] expires: Option<DateTime<Utc>>,
+        #[default(CachePolicy::default())] file_cache_policy: CachePolicy,
         #[default(0)] ref_count: i32,
         // This default value is sha256 of default url
         #[default("1f8b6bd39e9e70cc634217b4686e25c715c82f3fe364c6454399e0aa60118ea4")]
         filename: impl AsRef<str>,
         #[default(DEFAULT_CONTENT)] content: impl AsRef<str>,
-        #[default(RetryPolicy::None)] retry_policy: RetryPolicy,
-        #[default(None)] file_duration: Option<Duration>,
+        #[default(RetryPolicy::default())] retry_policy: RetryPolicy,
+        #[default(CachePolicy::default())] cache_policy: CachePolicy,
         #[default(None)] reqwest_client: Option<ReqwestClient>,
         #[future] database: CacheDatabaseFixture,
     ) -> CacheWithFileFixture {
         trace!("IN cache_with_file");
         let mut cache =
-            CacheFixture::new(database, retry_policy, file_duration, reqwest_client).await;
+            CacheFixture::new(database, retry_policy, cache_policy, reqwest_client).await;
         let cache_path = cache
             .cache_dir
             .path()
@@ -642,8 +621,9 @@ pub(crate) mod fixtures {
                 url: url.as_ref().to_string(),
                 cache_path,
                 created: Utc::now(),
-                expires,
-                status,
+                last_used: Utc::now(),
+                cache_policy: file_cache_policy.into(),
+                status: status.into(),
                 ref_count,
             })
             .await;
@@ -659,7 +639,7 @@ mod tests {
     };
     use super::Client;
     use crate::database::api;
-    use crate::{DateTime, FileStatus, RetryPolicy, Utc};
+    use crate::{FileStatus, RetryPolicy};
     use http_test_server::TestServer;
     use rstest::rstest;
     use std::time::Duration;
@@ -803,7 +783,7 @@ mod tests {
         #[case]
         ref_count: i32,
         #[future]
-        #[with(DEFAULT_URL, FileStatus::Ready, None, ref_count)]
+        #[with(DEFAULT_URL, FileStatus::Ready, Default::default(), ref_count)]
         cache_with_file: CacheWithFileFixture,
     ) {
         trace!("begin test");
@@ -813,22 +793,6 @@ mod tests {
             .remove(DEFAULT_URL)
             .await
             .expect("remove URL from cache");
-    }
-
-    #[rstest]
-    #[tokio::test]
-    #[traced_test]
-    #[awt]
-    async fn test_set_expires(#[future] cache_with_file: CacheWithFileFixture) {
-        trace!("begin test");
-        let (mut cache, entry) = cache_with_file;
-        let mut client = cache.client;
-        client
-            .set_expires(DEFAULT_URL, DateTime::<Utc>::MAX_UTC)
-            .await
-            .expect("set expiration timestamp");
-        let updated_entry = api::get_entry(&mut cache.db.conn, entry.id).await.unwrap();
-        assert_eq!(updated_entry.expires, Some(DateTime::<Utc>::MAX_UTC));
     }
 
     #[rstest]
@@ -874,7 +838,7 @@ mod tests {
     #[traced_test]
     #[awt]
     async fn test_wait_url_released(
-        #[with(DEFAULT_URL, FileStatus::Ready, None, 1)]
+        #[with(DEFAULT_URL, FileStatus::Ready, Default::default(), 1)]
         #[future]
         cache_with_file: CacheWithFileFixture,
         #[case] wait_time: Duration,

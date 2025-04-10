@@ -1,3 +1,4 @@
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -8,7 +9,43 @@ use crate::database;
 use crate::database::api;
 use crate::database::models::CacheEntry;
 use crate::errors::Error;
-use crate::FileStatus;
+use crate::CachePolicy;
+
+/// Status of cached file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum FileStatus {
+    /// File is probably still downloading. Client which queries this file
+    /// should wait for it to become `Ready`.
+    #[default]
+    Pending,
+
+    /// File is ready to be used.
+    Ready,
+
+    /// File is scheduled for removal. Client which queries this file
+    /// should not pick it up.
+    ToRemove,
+
+    /// File is corrupted. This means that something is wrong with the file
+    /// or the cache entry. Client which queries this file should not pick this up.
+    /// Corrupted files should be cheduled for removal at some point.
+    Corrupted,
+}
+
+impl fmt::Display for FileStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match *self {
+                Self::Ready => "Ready",
+                Self::Pending => "Pending",
+                Self::ToRemove => "ToRemove",
+                Self::Corrupted => "Corrupted",
+            }
+        )
+    }
+}
 
 /// Cached file.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,6 +74,9 @@ pub struct File {
     /// it is fine to store it here.
     cache_path: PathBuf,
 
+    /// Cache policy of this file.
+    cache_policy: CachePolicy,
+
     /// Creation timestamp.
     ///
     /// This is actually the timestamp of cache entry creation.
@@ -56,6 +96,7 @@ impl File {
             id: entry.id,
             url: entry.url,
             cache_path: PathBuf::from(entry.cache_path),
+            cache_policy: entry.cache_policy.into(),
             created: entry.created,
         }
     }
@@ -78,17 +119,18 @@ impl File {
         &self.created
     }
 
-    /// Current expiration timestamp.
+    /// Current last used timestamp.
     ///
-    /// Value is queried from cache database and represents expiration timestamp
-    /// at the moment. Keep in mind that this timestamp may be updated.
-    ///
-    /// After this timestamp the file status should be set to [`FileStatus::ToRemove`].
-    /// Then after its reference counter drops to 0, it should be removed from cache.
-    pub async fn expires(&self) -> Result<Option<DateTime<Utc>>, Error> {
+    /// Value is queried from cache database. Keep in mind that this timestamp may be updated.
+    pub async fn last_used(&self) -> Result<DateTime<Utc>, Error> {
         let mut connection = database::establish_connection(&self.database_url).await?;
         let entry = api::get_entry(&mut connection, self.id).await?;
-        Ok(entry.expires)
+        Ok(entry.last_used)
+    }
+
+    /// Cache policy of the file.
+    pub fn cache_policy(&self) -> CachePolicy {
+        self.cache_policy
     }
 
     /// Current status of the file.
@@ -98,7 +140,7 @@ impl File {
     pub async fn status(&self) -> Result<FileStatus, Error> {
         let mut connection = database::establish_connection(&self.database_url).await?;
         let entry = api::get_entry(&mut connection, self.id).await?;
-        Ok(entry.status)
+        Ok(entry.status.into())
     }
 
     /// Create a symlink pointing to this file at `path`.

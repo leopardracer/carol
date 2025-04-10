@@ -137,7 +137,7 @@ pub async fn run_migrations(database_url: &str) -> DatabaseResult<()> {
 pub(crate) mod fixtures {
     use super::models::{CacheEntry, NewCacheEntry};
     use super::{api, establish_connection, run_migrations, Connection};
-    use crate::{DateTime, FileStatus, Utc};
+    use crate::{CachePolicy, DateTime, FileStatus, Utc};
     use rstest::fixture;
     use tempfile::TempDir;
     use tracing::trace;
@@ -163,8 +163,9 @@ pub(crate) mod fixtures {
                 url: "http://localhost".to_string(),
                 cache_path: "/var/cache/file".to_string(),
                 created: DateTime::<Utc>::MIN_UTC,
-                expires: None,
-                status: FileStatus::Pending,
+                last_used: DateTime::<Utc>::MIN_UTC,
+                cache_policy: CachePolicy::None.into(),
+                status: FileStatus::Pending.into(),
                 ref_count: 0,
             }
         }

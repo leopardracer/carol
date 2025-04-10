@@ -2,13 +2,12 @@
 //!
 //! Basically just fancy wrappers around transactions on [`Connection`].
 
-use chrono::{DateTime, Utc};
 use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, SelectableHelper};
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use tracing::trace;
 
-use crate::database::models::{CacheEntry, NewCacheEntry};
+use crate::database::models::{CacheEntry, CachePolicyModel, FileStatusModel, NewCacheEntry};
 use crate::errors::{DatabaseError, RemoveErrorReason};
 use crate::FileStatus;
 
@@ -49,9 +48,9 @@ pub async fn new_entry(
     connection: &mut Connection,
     url: &str,
     cache_path: &str,
-    expires: Option<DateTime<Utc>>,
+    expire_policy: CachePolicyModel,
 ) -> DatabaseResult<CacheEntry> {
-    let new_entry = NewCacheEntry::new(url, cache_path, expires);
+    let new_entry = NewCacheEntry::new(url, cache_path, expire_policy);
     unsafe { insert_unsafe(connection, new_entry).await }
 }
 
@@ -196,7 +195,8 @@ pub async fn filter_by_status(
     connection
         .transaction(|conn| {
             async {
-                let filter = crate::database::schema::files::dsl::status.eq(status);
+                let filter =
+                    crate::database::schema::files::dsl::status.eq(FileStatusModel(status));
                 trace!("SELECT status={}", status);
                 crate::database::schema::files::dsl::files
                     .filter(filter)
@@ -220,7 +220,8 @@ pub async fn update_status(
         .immediate_transaction(|conn| {
             async {
                 let row = crate::database::schema::files::dsl::files.find(pk);
-                let assignment = crate::database::schema::files::dsl::status.eq(status);
+                let assignment =
+                    crate::database::schema::files::dsl::status.eq(FileStatusModel(status));
                 trace!("UPDATE pk={}, status = {:?}", pk, status);
                 diesel::update(row).set(assignment).get_result(conn).await
             }
@@ -268,32 +269,12 @@ pub async fn decrement_ref(connection: &mut Connection, pk: i32) -> DatabaseResu
         .await
 }
 
-/// Update `expires` field for cache entry.
-pub async fn update_expires(
-    connection: &mut Connection,
-    pk: i32,
-    expires: Option<DateTime<Utc>>,
-) -> DatabaseResult<CacheEntry> {
-    connection
-        .immediate_transaction(|conn| {
-            async {
-                let row = crate::database::schema::files::dsl::files.find(pk);
-                diesel::update(row)
-                    .set(crate::database::schema::files::dsl::expires.eq(expires))
-                    .get_result(conn)
-                    .await
-            }
-            .scope_boxed()
-        })
-        .await
-        .map_err(Into::into)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::database::fixtures::{database, database_with_single_entry, CacheDatabaseFixture};
     use crate::errors::DieselError;
+    use crate::CachePolicy;
     use rstest::rstest;
     use tracing_test::traced_test;
 
@@ -306,14 +287,14 @@ mod tests {
             &mut db_fixture.conn,
             "http://localhost",
             "/var/cache/file",
-            None,
+            CachePolicy::None.into(),
         )
         .await
         .expect("add new entry");
         assert_eq!(entry.url, "http://localhost".to_string());
         assert_eq!(entry.status, FileStatus::Pending);
         assert_eq!(entry.cache_path, "/var/cache/file".to_string());
-        assert_eq!(entry.expires, None);
+        assert_eq!(entry.cache_policy, CachePolicy::None.into());
         assert_eq!(entry.ref_count, 0);
     }
 
@@ -383,25 +364,6 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     #[awt]
-    async fn test_update_expires(#[future] fixture: (CacheDatabaseFixture, CacheEntry)) {
-        let (mut db_fixture, inserted_entry) = fixture;
-        update_expires(
-            &mut db_fixture.conn,
-            inserted_entry.id,
-            Some(DateTime::<Utc>::MAX_UTC),
-        )
-        .await
-        .expect("update expiration timestamp");
-        let entry = get_entry(&mut db_fixture.conn, inserted_entry.id)
-            .await
-            .unwrap();
-        assert_eq!(entry.expires, Some(DateTime::<Utc>::MAX_UTC));
-    }
-
-    #[rstest(database_with_single_entry as fixture)]
-    #[tokio::test]
-    #[traced_test]
-    #[awt]
     async fn test_update_status(#[future] fixture: (CacheDatabaseFixture, CacheEntry)) {
         let (mut db_fixture, inserted_entry) = fixture;
         update_status(&mut db_fixture.conn, inserted_entry.id, FileStatus::Ready)
@@ -424,7 +386,7 @@ mod tests {
             &mut db_fixture.conn,
             "http://localhost",
             "/var/cache/file2",
-            None,
+            CachePolicy::None.into(),
         )
         .await;
 
@@ -439,7 +401,7 @@ mod tests {
             &mut db_fixture.conn,
             "http://localhost/new_path",
             "/var/cache/file",
-            None,
+            CachePolicy::None.into(),
         )
         .await;
 
@@ -562,7 +524,7 @@ mod tests {
         #[future]
         #[from(database_with_single_entry)]
         #[with(NewCacheEntry {
-            status: FileStatus::ToRemove,
+            status: FileStatus::ToRemove.into(),
             ..CacheDatabaseFixture::default_new_entry()
         })]
         fixture: (CacheDatabaseFixture, CacheEntry),

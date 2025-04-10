@@ -5,7 +5,7 @@
 
 use crate::database::{self, api, Connection};
 use crate::errors::DatabaseError;
-use crate::FileStatus;
+use crate::{CachePolicy, FileStatus};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
@@ -108,7 +108,9 @@ async fn test_cache_database_stress_testing() {
 
             match action {
                 1 => {
-                    match api::new_entry(&mut db, &url, &cache_path, None).await {
+                    match api::new_entry(&mut db, &url, &cache_path, CachePolicy::default().into())
+                        .await
+                    {
                         Ok(entry) => {
                             pks.write().await.push(entry.id);
                         }
