@@ -19,7 +19,7 @@ pub enum CachePolicy {
     /// File will be stale after a certain time period after creation.
     ExpiresAfter { duration: Duration },
 
-    /// File will be stale after now being used for a certaion period of time.
+    /// File will be stale after now being used for a certain period of time.
     ExpiresAfterNotUsedFor { duration: Duration },
 }
 

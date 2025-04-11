@@ -2,6 +2,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tracing::{trace, warn};
 
@@ -12,7 +13,7 @@ use crate::errors::Error;
 use crate::CachePolicy;
 
 /// Status of cached file.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Deserialize, Serialize)]
 pub enum FileStatus {
     /// File is probably still downloading. Client which queries this file
     /// should wait for it to become `Ready`.
@@ -28,7 +29,7 @@ pub enum FileStatus {
 
     /// File is corrupted. This means that something is wrong with the file
     /// or the cache entry. Client which queries this file should not pick this up.
-    /// Corrupted files should be cheduled for removal at some point.
+    /// Corrupted files should be scheduled for removal at some point.
     Corrupted,
 }
 
@@ -48,7 +49,7 @@ impl fmt::Display for FileStatus {
 }
 
 /// Cached file.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct File {
     /// URL of the cache database where this file resides.
     database_url: String,

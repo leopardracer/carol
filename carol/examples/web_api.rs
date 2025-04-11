@@ -52,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
     // This client builder will be used in our clients pool
     let mut client_builder = Client::builder(DATABASE_URL, CACHE_DIR);
     client_builder
-        .cache_policy(CachePolicy::after(Duration::from_secs(30)))
+        .cache_policy(CachePolicy::not_used_for(Duration::from_secs(30)))
         .download_retry_policy(RetryPolicy::Fixed {
             number: 3,
             period: Duration::from_secs(1),

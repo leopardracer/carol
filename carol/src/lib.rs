@@ -67,7 +67,7 @@
 //!
 //! ## Cache expiration and eviction
 //!
-//! Carol ignroes HTTP caching policies deliberately. Instead it allows user to decide,
+//! Carol ignores HTTP caching policies deliberately. Instead it allows user to decide,
 //! how long the file should be stored in cache.
 //!
 //! *Coming soon...*
@@ -75,13 +75,21 @@
 
 mod cache_policy;
 mod client;
-mod database;
 mod file;
+
+// Just for now since there is no alternative
+#[cfg(not(any(feature = "sqlite")))]
+compile_error!("Feature \"sqlite\" must be enabled for this crate.");
+
+#[cfg_attr(feature = "sqlite", path = "database/sqlite/mod.rs")]
+mod database;
 
 pub mod errors;
 pub mod maintenance;
 #[cfg(feature = "pool")]
 pub mod pool;
+#[cfg(feature = "reqwest_middleware")]
+pub mod reqwest_middleware;
 
 pub use cache_policy::CachePolicy;
 pub use client::{Client, ClientBuilder};
@@ -92,6 +100,8 @@ pub use file::{File, FileStatus};
 pub use chrono::{DateTime, Utc};
 #[doc(no_inline)]
 pub use reqwest::Client as ReqwestClient;
+#[doc(no_inline)]
+pub use url::Url;
 
 /// Retry policy.
 ///

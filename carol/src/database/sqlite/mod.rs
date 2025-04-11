@@ -31,7 +31,7 @@ pub type Connection = SyncConnectionWrapper<SqliteConnection>;
 pub type DatabaseResult<T> = Result<T, DatabaseError>;
 
 const MIGRATIONS: EmbeddedMigrations =
-    diesel_migrations::embed_migrations!("src/database/migrations");
+    diesel_migrations::embed_migrations!("src/database/sqlite/migrations");
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
 
