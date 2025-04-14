@@ -1,6 +1,9 @@
 pub mod database;
-pub mod models;
-pub mod store_policy;
+pub mod file;
+pub mod storage_manager;
+
+#[cfg(feature = "sqlite")]
+pub mod sqlite;
 
 // Re-exports of public API arguments from extern crates
 #[doc(no_inline)]
