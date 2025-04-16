@@ -2,15 +2,15 @@
 //!
 //! Basically just fancy wrappers around transactions on [`Connection`].
 
-use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, SelectableHelper};
+use diesel::{
+    BoolExpressionMethods, ExpressionMethods, OptionalExtension, QueryDsl, SelectableHelper,
+};
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use tracing::trace;
 
-use crate::database;
-
-use super::error::{DatabaseError, RemoveErrorReason};
-use super::models::{File, FileStatus, NewFile};
+use super::error::DatabaseError;
+use super::models::{File, FileStatus, NewFile, StorePolicy};
 use super::schema::files::dsl::{self, files};
 use super::{Connection, DatabaseResult, PrimaryKey};
 
@@ -36,7 +36,7 @@ pub async fn get(connection: &mut Connection, pk: PrimaryKey) -> DatabaseResult<
     connection
         .transaction(|conn| {
             async {
-                trace!("SELECT pk={}", pk);
+                trace!("SELECT * WHERE id={}", pk);
                 files.find(pk).select(File::as_select()).first(conn).await
             }
             .scope_boxed()
@@ -46,26 +46,12 @@ pub async fn get(connection: &mut Connection, pk: PrimaryKey) -> DatabaseResult<
 }
 
 /// Delete entry from database.
-///
-/// Returns error if reference counter is not 0 or status is not `ToRemove`.
 pub async fn delete(connection: &mut Connection, pk: PrimaryKey) -> DatabaseResult<()> {
     connection
         .immediate_transaction(|conn| {
             async {
                 let row = files.find(pk);
-                let entry: File = files
-                    .find(pk)
-                    .select(File::as_select())
-                    .first(conn)
-                    .await
-                    .map_err(DatabaseError::from)?;
-                if entry.ref_count != 0 {
-                    return Err(DatabaseError::RemoveError(RemoveErrorReason::UsedFile));
-                }
-                if entry.status != database::FileStatus::ToRemove {
-                    return Err(DatabaseError::RemoveError(RemoveErrorReason::WrongStatus));
-                }
-                trace!("DELETE pk={}", pk);
+                trace!("DELETE WHERE id={}", pk);
                 diesel::delete(row)
                     .execute(conn)
                     .await
@@ -75,30 +61,6 @@ pub async fn delete(connection: &mut Connection, pk: PrimaryKey) -> DatabaseResu
             .scope_boxed()
         })
         .await
-}
-
-/// Raw database delete. Do not check reference counter or status.
-///
-/// # Safety
-///
-/// The caller must ensure that file is not used (ref_count = 0)
-/// and the status is set to `ToRemove`.
-pub async unsafe fn delete_unsafe(
-    connection: &mut Connection,
-    pk: PrimaryKey,
-) -> DatabaseResult<()> {
-    connection
-        .immediate_transaction(|conn| {
-            async {
-                let row = files.find(pk);
-                trace!("DELETE pk={}", pk);
-                diesel::delete(row).execute(conn).await?;
-                Ok(())
-            }
-            .scope_boxed()
-        })
-        .await
-        .map_err(diesel::result::Error::into)
 }
 
 /// Get all cache entries from database.
@@ -115,19 +77,18 @@ pub async fn get_all(connection: &mut Connection) -> DatabaseResult<Vec<File>> {
         .map_err(Into::into)
 }
 
-/// Get entry from database by URL field.
-pub async fn get_by_url(connection: &mut Connection, url: &str) -> DatabaseResult<Option<File>> {
+/// Get entry from database by source (URL or custom source).
+pub async fn get_by_source(connection: &mut Connection, source: &str) -> DatabaseResult<Vec<File>> {
     connection
         .transaction(|conn| {
             async {
-                let filter = dsl::url.eq(url);
-                trace!("SELECT url={}", url);
+                let filter = dsl::source.eq(source);
+                trace!("SELECT * WHERE source={}", source);
                 files
                     .filter(filter)
                     .select(File::as_select())
-                    .first(conn)
+                    .get_results(conn)
                     .await
-                    .optional()
             }
             .scope_boxed()
         })
@@ -144,7 +105,7 @@ pub async fn get_by_cache_path(
         .transaction(|conn| {
             async {
                 let filter = dsl::cache_path.eq(cache_path);
-                trace!("SELECT cache_path={}", cache_path);
+                trace!("SELECT * WHERE cache_path={}", cache_path);
                 files
                     .filter(filter)
                     .select(File::as_select())
@@ -159,15 +120,15 @@ pub async fn get_by_cache_path(
 }
 
 /// Get all cache entries with given `status`.
-pub async fn filter_by_status(
+pub async fn get_by_status(
     connection: &mut Connection,
-    status: database::FileStatus,
+    status: FileStatus,
 ) -> DatabaseResult<Vec<File>> {
     connection
         .transaction(|conn| {
             async {
-                let filter = dsl::status.eq(FileStatus(status));
-                trace!("SELECT status={}", status);
+                let filter = dsl::status.eq(status);
+                trace!("SELECT * WHERE status={}", status);
                 files
                     .filter(filter)
                     .select(File::as_select())
@@ -184,14 +145,14 @@ pub async fn filter_by_status(
 pub async fn update_status(
     connection: &mut Connection,
     pk: PrimaryKey,
-    status: database::FileStatus,
+    status: FileStatus,
 ) -> DatabaseResult<File> {
     connection
         .immediate_transaction(|conn| {
             async {
                 let row = files.find(pk);
-                let assignment = dsl::status.eq(FileStatus(status));
-                trace!("UPDATE pk={}, status = {:?}", pk, status);
+                let assignment = dsl::status.eq(status);
+                trace!("UPDATE SET status={} WHERE id={}, ", status, pk);
                 diesel::update(row).set(assignment).get_result(conn).await
             }
             .scope_boxed()
@@ -200,38 +161,38 @@ pub async fn update_status(
         .map_err(Into::into)
 }
 
-/// Add one reference to the counter (`ref_count++`). Returns updated entry.
-pub async fn increment_ref(connection: &mut Connection, pk: PrimaryKey) -> DatabaseResult<File> {
+/// Get all "stale" cache entries from the database.
+pub async fn get_all_stale(connection: &mut Connection) -> DatabaseResult<Vec<File>> {
     connection
-        .immediate_transaction(|conn| {
+        .transaction(|conn| {
             async {
-                let row = files.find(pk);
-                let entry: File = diesel::update(row)
-                    .set(dsl::ref_count.eq(dsl::ref_count + 1))
-                    .get_result(conn)
-                    .await?;
-                trace!("UPDATE pk={}, ref count = {}", pk, entry.ref_count);
-                Ok::<File, DatabaseError>(entry)
-            }
-            .scope_boxed()
-        })
-        .await
-}
+                // let min_months_predicate = a::min_unit
+                //     .eq(Some("Months"))
+                //     .and(a::min_duration.le(Some(param1)));
+                // let min_years_predicate = a::min_unit
+                //     .eq(Some("Years"))
+                //     .and(a::min_duration.le(Some(param1)));
 
-/// Remove one reference from the counter (`ref_count--`). Returns updated entry.
-pub async fn decrement_ref(connection: &mut Connection, pk: PrimaryKey) -> DatabaseResult<File> {
-    connection
-        .immediate_transaction(|conn| {
-            async {
-                let row = files.find(pk);
-                let entry: File = diesel::update(row)
-                    .set(dsl::ref_count.eq(dsl::ref_count - 1))
-                    .get_result(conn)
-                    .await?;
-                trace!("UPDATE pk={}, ref count = {}", pk, entry.ref_count);
-                Ok::<File, DatabaseError>(entry)
+                // query = query
+                //     .filter(min_months_predicate.or(min_years_predicate))
+                //     .filter(a::max_duration.ge(Some(param2)));
+                // let x = conn.batch_execute("").await;
+
+                trace!("SELECT * WHERE (store_policy=ExpiresAfter AND store_policy_data + created < NOW())");
+                let expired_after = dsl::store_policy
+                    .eq(StorePolicy::ExpiresAfter)
+                    .and((dsl::store_policy_data).gt(123));
+                let expired_after_not_used = dsl::store_policy
+                    .eq(StorePolicy::ExpiresAfterNotUsedFor)
+                    .and(dsl::store_policy_data.gt(123));
+                files
+                    .filter(expired_after.or(expired_after_not_used))
+                    .select(File::as_select())
+                    .get_results(conn)
+                    .await
             }
             .scope_boxed()
         })
         .await
+        .map_err(Into::into)
 }

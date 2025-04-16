@@ -1,12 +1,13 @@
 pub mod database;
+pub mod error;
 pub mod file;
 pub mod storage_manager;
 
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 
-// Re-exports of public API arguments from extern crates
+// Re-exports of extern crates containing types referenced in public API
 #[doc(no_inline)]
-pub use chrono::{DateTime, Utc};
+pub use chrono;
 #[doc(no_inline)]
-pub use url::Url;
+pub use url;

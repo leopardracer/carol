@@ -4,9 +4,8 @@ diesel::table! {
         /// Primary key.
         id -> Integer,
 
-        // Manually added UNIQUE to up.sql, because diesel can't do that
-        /// URL of the downloaded file.
-        url -> VarChar,
+        /// URL of the downloaded file or some other source.
+        source -> VarChar,
 
         // Manually added UNIQUE to up.sql, because diesel can't do that
         /// Path to downloaded file in cache.
@@ -21,13 +20,13 @@ diesel::table! {
         /// When the file was used last time.
         last_used -> TimestamptzSqlite,
 
-        /// Cache policy.
-        cache_policy -> VarChar,
+        /// Store policy.
+        store_policy -> Integer,
+
+        /// Additional store policy data.
+        store_policy_data -> Nullable<Integer>,
 
         /// Current status of the cache entry.
         status -> Integer,
-
-        /// Reference counter of the cache entry.
-        ref_count -> Integer,
     }
 }

@@ -3,7 +3,6 @@
 //! An SQLite database build with migrations from `./migrations`.
 
 use std::fmt;
-use std::path::PathBuf;
 
 use async_trait::async_trait;
 use diesel::{ConnectionError, ConnectionResult, SqliteConnection};
@@ -18,8 +17,8 @@ use futures_util::FutureExt;
 use tokio::time::{self, Duration};
 use tracing::trace;
 
-use crate::database::{FileStatus, StorageDatabase};
-use crate::file::{File, FileId, FileMetadata, FileSource};
+use crate::database::{StorageDatabase, StorageDatabaseExt};
+use crate::file::{File, FileId, FileMetadata, FileSource, FileStatus};
 
 #[allow(dead_code)]
 mod api;
@@ -28,7 +27,7 @@ mod schema;
 
 pub mod error;
 
-use error::DatabaseError;
+use error::{ConvertStorePolicyError, DatabaseError};
 
 /// Inner SQLite connection type.
 type Connection = SyncConnectionWrapper<SqliteConnection>;
@@ -149,6 +148,15 @@ impl SqliteStorageDatabase {
             database_url: database_url.to_string(),
         })
     }
+
+    pub fn model_to_file(&self, model: models::File) -> Result<File, ConvertStorePolicyError> {
+        Ok(File {
+            database: self.database_url.clone(),
+            status: model.status.into(),
+            id: model.id.into(),
+            metadata: FileMetadata::try_from(model)?,
+        })
+    }
 }
 
 impl fmt::Debug for SqliteStorageDatabase {
@@ -157,10 +165,6 @@ impl fmt::Debug for SqliteStorageDatabase {
             .field("database_url", &self.database_url)
             .finish()
     }
-}
-
-fn to_pk(id: FileId) -> PrimaryKey {
-    u32::from(id) as i32
 }
 
 #[async_trait]
@@ -174,41 +178,37 @@ impl StorageDatabase for SqliteStorageDatabase {
     }
 
     async fn store(&self, metadata: FileMetadata) -> DatabaseResult<FileId> {
-        let new_file = models::NewFile {
-            url: metadata.source.to_string(),
-            cache_path: metadata.path.as_os_str().to_str().unwrap().to_string(),
-            filename: metadata.filename,
-            created: metadata.created,
-            last_used: metadata.last_used,
-            cache_policy: metadata.store_policy.into(),
-            status: FileStatus::default().into(),
-            ref_count: 0,
-        };
         let mut conn = self.pool.get().await?;
-        let entry = api::insert(conn.as_mut(), new_file).await?;
-        let id: u32 = entry.id as u32;
-        Ok(id.into())
+        let file = api::insert(conn.as_mut(), models::NewFile::try_from(metadata)?).await?;
+        Ok(file.id.into())
     }
 
-    async fn get(&self, id: FileId) -> DatabaseResult<File<Self>> {
+    async fn get(&self, id: FileId) -> DatabaseResult<File> {
         let mut conn = self.pool.get().await?;
-        let file = api::get(conn.as_mut(), to_pk(id)).await?;
-        Ok(File {
-            database: self.clone(),
-            id,
-            metadata: FileMetadata {
-                source: FileSource::parse(&file.url),
-                filename: file.filename,
-                path: PathBuf::from(file.cache_path),
-                created: file.created,
-                last_used: file.last_used,
-                store_policy: file.cache_policy.into(),
-            },
-        })
+        let file = api::get(conn.as_mut(), id.into()).await?;
+        Ok(self.model_to_file(file)?)
     }
 
     async fn remove(&self, id: FileId) -> DatabaseResult<()> {
         let mut conn = self.pool.get().await?;
-        api::delete(conn.as_mut(), to_pk(id)).await
+        api::delete(conn.as_mut(), id.into()).await
+    }
+}
+
+#[async_trait]
+impl StorageDatabaseExt for SqliteStorageDatabase {
+    async fn select_by_source(&self, source: &FileSource) -> DatabaseResult<Vec<File>> {
+        let mut conn = self.pool.get().await?;
+        let files = api::get_by_source(conn.as_mut(), source.as_str()).await?;
+        Ok(files
+            .into_iter()
+            .map(|file| self.model_to_file(file))
+            .collect::<Result<_, _>>()?)
+    }
+
+    async fn update_status(&self, id: FileId, new_status: FileStatus) -> Result<File, Self::Error> {
+        let mut conn = self.pool.get().await?;
+        let file = api::update_status(conn.as_mut(), id.into(), new_status.into()).await?;
+        Ok(self.model_to_file(file)?)
     }
 }

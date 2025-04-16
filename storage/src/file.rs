@@ -2,26 +2,24 @@
 
 use std::fmt;
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
+use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
-
-use crate::{DateTime, Url, Utc};
-
-use super::database::StorageDatabase;
+use url::Url;
 
 /// File identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct FileId(u32);
+pub struct FileId(i32);
 
-impl From<u32> for FileId {
-    fn from(value: u32) -> Self {
+impl From<i32> for FileId {
+    fn from(value: i32) -> Self {
         Self(value)
     }
 }
 
-impl From<FileId> for u32 {
+impl From<FileId> for i32 {
     fn from(value: FileId) -> Self {
         value.0
     }
@@ -104,6 +102,39 @@ impl fmt::Display for FileSource {
     }
 }
 
+/// Status of stored file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Deserialize, Serialize)]
+pub enum FileStatus {
+    /// File is not yet fully moved into storage.
+    #[default]
+    Pending,
+
+    /// File is ready to be used.
+    Ready,
+
+    /// File is scheduled for removal.
+    ToRemove,
+
+    /// File is corrupted. This means that something is wrong with the file
+    /// or the cache entry.
+    Corrupted,
+}
+
+impl fmt::Display for FileStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match *self {
+                Self::Ready => "Ready",
+                Self::Pending => "Pending",
+                Self::ToRemove => "ToRemove",
+                Self::Corrupted => "Corrupted",
+            }
+        )
+    }
+}
+
 /// Describes when stored file will be considered "stale".
 ///
 /// File can be stored only for a certain period of time.
@@ -122,12 +153,12 @@ pub enum StorePolicy {
 
     /// File is considered stale after not being used for a certain period of time.
     ///
-    /// When this policy is used, [`File::last_used`][crate::file::File::last_used]
-    /// timestamp is used to define if the file is stale.
+    /// When this policy is used, [`FileMetadata::last_used`] timestamp is used to define
+    /// if the file is stale.
     ExpiresAfterNotUsedFor { duration: Duration },
 }
 
-/// Stored file metadata.
+/// File metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileMetadata {
     /// File source.
@@ -151,23 +182,35 @@ pub struct FileMetadata {
     pub last_used: DateTime<Utc>,
 }
 
+impl FileMetadata {
+    pub fn time_to_live(&self) -> Option<TimeDelta> {
+        match self.store_policy {
+            StorePolicy::StoreForever => None,
+            StorePolicy::ExpiresAfter { duration } => Some(Utc::now() - (self.created + duration)),
+            StorePolicy::ExpiresAfterNotUsedFor { duration } => {
+                Some(Utc::now() - (self.last_used + duration))
+            }
+        }
+    }
+
+    pub fn is_expired(&self) -> bool {
+        self.time_to_live()
+            .is_none_or(|delta| delta.num_seconds() <= 0)
+    }
+}
+
 /// Stored file.
-///
-/// Generic argument `D` defines which database is used to manage this file.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct File<D: StorageDatabase> {
+pub struct File {
     /// URI of the database used to manage this file.
-    pub database: D,
+    pub database: String,
 
     /// Unique file identifier.
     pub id: FileId,
 
+    /// Status of stored file.
+    pub status: FileStatus,
+
     /// Metadata of stored file.
     pub metadata: FileMetadata,
-}
-
-impl<D: StorageDatabase> File<D> {
-    pub fn time_to_live(&self, _now: SystemTime) -> Duration {
-        todo!()
-    }
 }

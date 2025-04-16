@@ -56,7 +56,27 @@ jobs:
       - name: Use Rust cache
         uses: Swatinem/rust-cache@v2
       - name: Run build check
+        env:
+          RUSTFLAGS: "-D warnings"
         run: cargo check --locked
+
+  build-docs:
+    name: Build docs
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          default: true
+      - name: Use Rust cache
+        uses: Swatinem/rust-cache@v2
+      - name: Run build check
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --no-deps
 
   run-tests:
     # We had a couple of situations where tests got deadlocked because of bugs in async code.

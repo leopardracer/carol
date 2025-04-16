@@ -7,6 +7,7 @@ pub use diesel::result::{ConnectionError, Error as DieselError};
 pub use diesel_async::pooled_connection::deadpool::{BuildError, PoolError};
 
 use crate::database::StorageDatabaseError;
+use crate::error::NonUtf8PathError;
 
 /// Cache database related errors.
 #[derive(thiserror::Error, Debug)]
@@ -26,8 +27,11 @@ pub enum DatabaseError {
     #[error(transparent)]
     DieselError(#[from] DieselError),
 
-    #[error("failed to remove entry")]
-    RemoveError(#[from] RemoveErrorReason),
+    #[error(transparent)]
+    StorePolicyError(#[from] ConvertStorePolicyError),
+
+    #[error(transparent)]
+    CreateNewFileError(#[from] CreateNewFileError),
 }
 
 impl StorageDatabaseError for DatabaseError {
@@ -46,14 +50,26 @@ impl StorageDatabaseError for DatabaseError {
     }
 }
 
-/// Reason why remove failed.
+/// Error during serializing or deserializing store policy.
 #[derive(thiserror::Error, Debug)]
-pub enum RemoveErrorReason {
-    /// Reference counter is not 0
-    #[error("reference counter is not 0")]
-    UsedFile,
+pub enum ConvertStorePolicyError {
+    /// Failed to convert store policy enum variant.
+    #[error("failed to convert store policy enum variant")]
+    TryFromIntError(#[from] std::num::TryFromIntError),
 
-    /// Entry status is not 'ToRemove'
-    #[error("entry status is not 'ToRemove'")]
-    WrongStatus,
+    /// Store policy data is missing.
+    #[error("store policy data is missing")]
+    MissingPolicyData,
+}
+
+/// Error during creation of new file in cache database.
+#[derive(thiserror::Error, Debug)]
+pub enum CreateNewFileError {
+    /// Failed to serialize or deserialize store policy.
+    #[error(transparent)]
+    StorePolicyError(#[from] ConvertStorePolicyError),
+
+    /// Failed to convert paths.
+    #[error(transparent)]
+    NonUtf8PathError(#[from] NonUtf8PathError),
 }

@@ -11,12 +11,12 @@ use serde::Serialize;
 #[doc(no_inline)]
 pub use storage;
 
-use storage::database::StorageDatabase;
+use storage::database::StorageDatabaseExt;
 use storage::file::StorePolicy;
 use storage::sqlite::SqliteStorageDatabase;
 use storage::storage_manager::StorageManager;
 
-pub struct CarolMiddleware<D: StorageDatabase = SqliteStorageDatabase> {
+pub struct CarolMiddleware<D: StorageDatabaseExt = SqliteStorageDatabase> {
     pub storage_manager: StorageManager<D>,
     pub store_policy: StorePolicy,
 }
@@ -24,7 +24,7 @@ pub struct CarolMiddleware<D: StorageDatabase = SqliteStorageDatabase> {
 #[async_trait]
 impl<D> Middleware for CarolMiddleware<D>
 where
-    D: StorageDatabase + 'static,
+    D: StorageDatabaseExt + 'static,
     D::Uri: Serialize + Send,
 {
     async fn handle(
