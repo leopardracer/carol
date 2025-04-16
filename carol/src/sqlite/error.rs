@@ -60,6 +60,15 @@ pub enum ConvertStorePolicyError {
     /// Store policy data is missing.
     #[error("store policy data is missing")]
     MissingPolicyData,
+
+    #[error("failed to deserialize enum variant: {0}")]
+    BadEnumVariat(String),
+}
+
+impl ConvertStorePolicyError {
+    pub fn bad_enum_variant(msg: String) -> Self {
+        Self::BadEnumVariat(msg)
+    }
 }
 
 /// Error during creation of new file in cache database.

@@ -212,3 +212,259 @@ impl StorageDatabaseExt for SqliteStorageDatabase {
         Ok(self.model_to_file(file)?)
     }
 }
+
+/// Database [`rstest`] fixtures. Helps in testing database-related code.
+#[cfg(test)]
+pub mod fixtures {
+    use super::{api, models, run_migrations, Connection, SqliteStorageDatabase};
+    use chrono::{DateTime, Utc};
+    use diesel_async::pooled_connection::deadpool::Object;
+    use rstest::fixture;
+    use tempfile::TempDir;
+    use tracing::trace;
+
+    /// Fixture which creates new database as temp file.
+    /// Removes database on drop.
+    pub struct SqliteDatabaseFixture {
+        /// Holds temp directory and removes it on drop.
+        tmp: TempDir,
+
+        /// Database connection.
+        pub database: SqliteStorageDatabase,
+    }
+
+    impl SqliteDatabaseFixture {
+        pub const FILENAME: &str = "test.carol.sqlite";
+
+        /// Just an example entry of database.
+        pub fn default_new_entry() -> models::NewFile {
+            models::NewFile {
+                source: url::Url::parse("http://localhost").unwrap().to_string(),
+                cache_path: "/var/cache/file".to_string(),
+                filename: None,
+                created: DateTime::<Utc>::MIN_UTC,
+                last_used: DateTime::<Utc>::MIN_UTC,
+                store_policy: models::StorePolicy::StoreForever,
+                store_policy_data: None,
+                status: models::FileStatus::Pending,
+            }
+        }
+
+        /// Create new empty temp database.
+        pub async fn new() -> Self {
+            trace!("creating CacheDatabaseFixture");
+            let tmp = tempfile::tempdir().unwrap();
+            let database_url = tmp
+                .path()
+                .join(Self::FILENAME)
+                .to_str()
+                .unwrap()
+                .to_string();
+            run_migrations(&database_url).await.unwrap();
+            let database = SqliteStorageDatabase::connect_pool(&database_url, Some(4))
+                .await
+                .unwrap();
+            Self { tmp, database }
+        }
+
+        /// Path to database file.
+        pub fn database_url(&self) -> String {
+            self.tmp
+                .path()
+                .join(Self::FILENAME)
+                .to_str()
+                .unwrap()
+                .to_string()
+        }
+
+        /// Get one database connection instance.
+        pub async fn conn(&self) -> Object<Connection> {
+            self.database.pool.get().await.unwrap()
+        }
+
+        /// Insert new entry into current database fixture.
+        pub async fn insert_entry(&self, new_entry: models::NewFile) -> models::File {
+            trace!(
+                "inserting entry into CacheDatabaseFixture: {:?}",
+                &new_entry
+            );
+            let entry = api::insert(self.conn().await.as_mut(), new_entry)
+                .await
+                .unwrap();
+            trace!("CacheDatabaseFixture now contains: {:?}", &entry);
+            entry
+        }
+    }
+
+    /// Create new empty database.
+    #[fixture]
+    pub async fn database() -> SqliteDatabaseFixture {
+        SqliteDatabaseFixture::new().await
+    }
+
+    /// Create new database with a single entry.
+    #[fixture]
+    pub async fn database_with_single_entry(
+        #[default(SqliteDatabaseFixture::default_new_entry())] new_entry: models::NewFile,
+    ) -> (SqliteDatabaseFixture, models::File) {
+        let database = database().await;
+        let entry = database.insert_entry(new_entry).await;
+        (database, entry)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fixtures::{database, database_with_single_entry, SqliteDatabaseFixture};
+    use super::{establish_connection, models};
+    use crate::database::{StorageDatabase, StorageDatabaseExt};
+    use crate::error::NonUtf8PathError;
+    use crate::file::{FileMetadata, FileSource, FileStatus, StorePolicy};
+    use chrono::Utc;
+    use rstest::rstest;
+    use std::path::PathBuf;
+    use tracing_test::traced_test;
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_create_new_database() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("carol.sqlite");
+        let db_path_str = db_path
+            .as_os_str()
+            .to_str()
+            .ok_or(NonUtf8PathError)
+            .unwrap();
+
+        establish_connection(db_path_str)
+            .await
+            .expect("create new database");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    #[traced_test]
+    #[awt]
+    async fn test_connect_to_existing_database(#[future] database: SqliteDatabaseFixture) {
+        establish_connection(&database.database_url())
+            .await
+            .expect("connect to existing database");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    #[traced_test]
+    #[awt]
+    async fn test_uri(#[future] database: SqliteDatabaseFixture) {
+        assert_eq!(database.database.uri(), database.database_url());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    #[traced_test]
+    #[awt]
+    async fn test_debug_fmt(#[future] database: SqliteDatabaseFixture) {
+        assert_eq!(
+            format!("{:?}", database.database),
+            format!(
+                "SqliteStorageDatabase {{ database_url: \"{}\" }}",
+                database.database_url()
+            )
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    #[traced_test]
+    #[awt]
+    async fn test_store(#[future] database: SqliteDatabaseFixture) {
+        let now = Utc::now();
+        database
+            .database
+            .store(FileMetadata {
+                source: FileSource::parse("somesource"),
+                filename: None,
+                path: PathBuf::from("/some/path"),
+                store_policy: StorePolicy::StoreForever,
+                created: now,
+                last_used: now,
+            })
+            .await
+            .expect("store");
+    }
+
+    #[rstest]
+    #[case::real_id(None)]
+    #[should_panic(expected = "get: DieselError(NotFound)")]
+    #[case::wrong_id(Some(42))]
+    #[tokio::test]
+    #[traced_test]
+    #[awt]
+    async fn test_get(
+        #[future] database_with_single_entry: (SqliteDatabaseFixture, models::File),
+        #[case] id: Option<i32>,
+    ) {
+        let (fixture, inserted) = database_with_single_entry;
+        let id = if let Some(id) = id { id } else { inserted.id };
+        fixture.database.get(id.into()).await.expect("get");
+    }
+
+    #[rstest]
+    #[case::real_id(None)]
+    #[case::wrong_id(Some(42))]
+    #[tokio::test]
+    #[traced_test]
+    #[awt]
+    async fn test_remove(
+        #[future] database_with_single_entry: (SqliteDatabaseFixture, models::File),
+        #[case] id: Option<i32>,
+    ) {
+        let (fixture, inserted) = database_with_single_entry;
+        let id = if let Some(id) = id { id } else { inserted.id };
+        fixture.database.remove(id.into()).await.expect("remove");
+    }
+
+    #[rstest]
+    #[case::existing_source(None, 1)]
+    #[case::not_existing_source(
+        Some(FileSource::Custom("nosource".to_string())),
+        0,
+    )]
+    #[tokio::test]
+    #[traced_test]
+    #[awt]
+    async fn test_select_by_source(
+        #[future] database_with_single_entry: (SqliteDatabaseFixture, models::File),
+        #[case] source: Option<FileSource>,
+        #[case] expected_count: usize,
+    ) {
+        let (fixture, inserted) = database_with_single_entry;
+        let source = if let Some(source) = source {
+            source
+        } else {
+            FileSource::parse(&inserted.source)
+        };
+        let result = fixture
+            .database
+            .select_by_source(&source)
+            .await
+            .expect("select by source");
+        assert_eq!(result.len(), expected_count);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    #[traced_test]
+    #[awt]
+    async fn test_update_status(
+        #[future] database_with_single_entry: (SqliteDatabaseFixture, models::File),
+    ) {
+        let (fixture, inserted) = database_with_single_entry;
+        let updated = fixture
+            .database
+            .update_status(inserted.id.into(), FileStatus::ToRemove)
+            .await
+            .expect("update status");
+        assert_eq!(updated.status, FileStatus::ToRemove);
+    }
+}

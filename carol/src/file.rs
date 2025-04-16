@@ -2,6 +2,7 @@
 
 use std::fmt;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
@@ -72,8 +73,16 @@ impl From<Url> for FileSource {
     }
 }
 
+impl FromStr for FileSource {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self::parse(s))
+    }
+}
+
 impl From<FileSource> for String {
-    fn from(value: FileSource) -> Self {
+    fn from(value: FileSource) -> String {
         match value {
             FileSource::Url(url) => url.into(),
             FileSource::Custom(s) => s,
@@ -183,19 +192,19 @@ pub struct FileMetadata {
 }
 
 impl FileMetadata {
-    pub fn time_to_live(&self) -> Option<TimeDelta> {
+    pub fn time_to_live(&self, now: DateTime<Utc>) -> Option<TimeDelta> {
         match self.store_policy {
             StorePolicy::StoreForever => None,
-            StorePolicy::ExpiresAfter { duration } => Some(Utc::now() - (self.created + duration)),
+            StorePolicy::ExpiresAfter { duration } => Some(self.created + duration - now),
             StorePolicy::ExpiresAfterNotUsedFor { duration } => {
-                Some(Utc::now() - (self.last_used + duration))
+                Some(self.last_used + duration - now)
             }
         }
     }
 
-    pub fn is_expired(&self) -> bool {
-        self.time_to_live()
-            .is_none_or(|delta| delta.num_seconds() <= 0)
+    pub fn is_expired(&self, now: DateTime<Utc>) -> bool {
+        self.time_to_live(now)
+            .is_some_and(|delta| delta.num_seconds() <= 0)
     }
 }
 
@@ -213,4 +222,169 @@ pub struct File {
 
     /// Metadata of stored file.
     pub metadata: FileMetadata,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FileMetadata, FileSource, StorePolicy};
+    use chrono::{DateTime, TimeDelta, Utc};
+    use rstest::{fixture, rstest};
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    #[rstest]
+    #[trace]
+    fn test_file_source_urls(
+        #[values(
+            "https://localhost:8080/file.txt",
+            "https://example.com",
+            "https://example.com/",
+            "file://path/to/file",
+            "schema://host.com/file?param=value"
+        )]
+        input: &str,
+    ) {
+        let source = FileSource::parse(input.as_ref());
+        assert!(matches!(source, FileSource::Url(..)));
+    }
+
+    #[rstest]
+    #[trace]
+    fn test_file_source_custom(#[values("some.source", "/path/to/local", "")] input: &str) {
+        let source = FileSource::parse(input.as_ref());
+        assert!(matches!(source, FileSource::Custom(..)));
+    }
+
+    #[rstest]
+    #[case("https://example.com/", "https://example.com/")]
+    #[case("https://example.com", "https://example.com/")]
+    #[case("https://example.com/file", "https://example.com/file")]
+    #[trace]
+    fn test_file_source_as_str(#[case] input: &str, #[case] expected: &str) {
+        let source = FileSource::parse(input.as_ref());
+        assert_eq!(source.as_str(), expected);
+    }
+
+    #[rstest]
+    #[case(
+        "https://example.com/",
+        "0f115db062b7c0dd030b16878c99dea5c354b49dc37b38eb8846179c7783e9d7"
+    )]
+    #[case(
+        "https://example.com",
+        "0f115db062b7c0dd030b16878c99dea5c354b49dc37b38eb8846179c7783e9d7"
+    )]
+    #[case("", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")]
+    #[trace]
+    fn test_file_source_digest(#[case] input: FileSource, #[case] expected: &str) {
+        let digest = sha256::digest(&input);
+        assert_eq!(digest, expected);
+    }
+
+    #[fixture]
+    fn now() -> DateTime<Utc> {
+        Utc::now()
+    }
+
+    #[rstest]
+    #[case(
+        DateTime::<Utc>::MIN_UTC,
+        DateTime::<Utc>::MIN_UTC,
+        StorePolicy::StoreForever,
+        None,
+    )]
+    #[case(
+        now,
+        DateTime::<Utc>::MIN_UTC,
+        StorePolicy::ExpiresAfter { duration: Duration::from_secs(1) },
+        Some(TimeDelta::seconds(1)),
+    )]
+    #[case(
+        now - TimeDelta::seconds(2),
+        DateTime::<Utc>::MIN_UTC,
+        StorePolicy::ExpiresAfter { duration: Duration::from_secs(1) },
+        Some(TimeDelta::seconds(-1)),
+    )]
+    #[case(
+        DateTime::<Utc>::MIN_UTC,
+        now,
+        StorePolicy::ExpiresAfterNotUsedFor { duration: Duration::from_secs(1) },
+        Some(TimeDelta::seconds(1)),
+    )]
+    #[case(
+        DateTime::<Utc>::MIN_UTC,
+        now - TimeDelta::seconds(2),
+        StorePolicy::ExpiresAfterNotUsedFor { duration: Duration::from_secs(1) },
+        Some(TimeDelta::seconds(-1)),
+    )]
+    #[trace]
+    fn test_file_time_to_live(
+        now: DateTime<Utc>,
+        #[case] created: DateTime<Utc>,
+        #[case] last_used: DateTime<Utc>,
+        #[case] store_policy: StorePolicy,
+        #[case] expected: Option<TimeDelta>,
+    ) {
+        let file = FileMetadata {
+            source: FileSource::Custom("".to_string()),
+            filename: None,
+            path: PathBuf::from(""),
+            store_policy,
+            created,
+            last_used,
+        };
+        let ttl = file.time_to_live(now);
+        assert_eq!(ttl, expected);
+    }
+
+    #[rstest]
+    #[case( // StoreForever never expires
+        DateTime::<Utc>::MIN_UTC,
+        DateTime::<Utc>::MIN_UTC,
+        StorePolicy::StoreForever,
+        false,
+    )]
+    #[case( // created now and will expire in 1 sec
+        now,
+        DateTime::<Utc>::MIN_UTC,
+        StorePolicy::ExpiresAfter { duration: Duration::from_secs(1) },
+        false,
+    )]
+    #[case( // created 2 secs ago and lived for 1 sec after that
+        now - TimeDelta::seconds(2),
+        DateTime::<Utc>::MIN_UTC,
+        StorePolicy::ExpiresAfter { duration: Duration::from_secs(1) },
+        true,
+    )]
+    #[case( // last used now and will expire in 1 sec
+        DateTime::<Utc>::MIN_UTC,
+        now,
+        StorePolicy::ExpiresAfterNotUsedFor { duration: Duration::from_secs(1) },
+        false,
+    )]
+    #[case( // last used 2 secs ago and lived for 1 sec after that
+        DateTime::<Utc>::MIN_UTC,
+        now - TimeDelta::seconds(2),
+        StorePolicy::ExpiresAfterNotUsedFor { duration: Duration::from_secs(1) },
+        true,
+    )]
+    #[trace]
+    fn test_file_is_expired(
+        now: DateTime<Utc>,
+        #[case] created: DateTime<Utc>,
+        #[case] last_used: DateTime<Utc>,
+        #[case] store_policy: StorePolicy,
+        #[case] expected: bool,
+    ) {
+        let file = FileMetadata {
+            source: FileSource::Custom("".to_string()),
+            filename: None,
+            path: PathBuf::from(""),
+            store_policy,
+            created,
+            last_used,
+        };
+        let expired = file.is_expired(now);
+        assert_eq!(expired, expected);
+    }
 }
