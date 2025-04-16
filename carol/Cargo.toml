@@ -8,17 +8,22 @@ license = "MIT OR Apache-2.0"
 rust-version = "1.85"
 
 [dependencies]
-async-trait = "0.1"
-bytes = "1"
-chrono = { version = "0.4", features = ["serde"] }
-diesel = { version = "2", features = ["sqlite", "returning_clauses_for_sqlite_3_35", "chrono"] }
-diesel-async = { version = "0.5", features = ["async-connection-wrapper", "sqlite", "pool", "deadpool"] }
-diesel_migrations = { version = "2" }
-futures-util = { version = "0.3", features = ["io"] }
-thiserror = "2"
-tracing = "0.1"
-tokio = { version = "1", features = ["time"] }
-sha256 = "1.5"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-url = { version = "2", features = ["serde"] }
+async-trait = "0.1.88"
+bytes = "1.10.1"
+chrono = { version = "0.4.40", features = ["serde"] }
+diesel = { version = "2.2.9", features = ["sqlite", "returning_clauses_for_sqlite_3_35", "chrono"] }
+diesel-async = { version = "0.5.2", features = ["async-connection-wrapper", "sqlite", "pool", "deadpool"] }
+diesel_migrations = "2.2.0"
+futures-util = { version = "0.3.31", features = ["io"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+sha256 = "1.6.0"
+thiserror = "2.0.12"
+tokio = { version = "1.44.2", features = ["time"] }
+tracing = "0.1.41"
+url = { version = "2.5.4", features = ["serde"] }
+
+[dev-dependencies]
+rstest = "0.25.0"
+tempfile = "3.19.1"
+tokio = { version = "1.44.2", features = ["rt", "macros"] }
