@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -9,11 +9,13 @@ use tokio::io::AsyncWriteExt;
 use tokio::time;
 
 use crate::database::{StorageDatabase, StorageDatabaseError, StorageDatabaseExt};
+use crate::sqlite::error::DatabaseError;
+use crate::sqlite::{run_migrations, SqliteStorageDatabase};
 
 use super::file::{File, FileMetadata, FileSource, FileStatus, StorePolicy};
 
 #[derive(Clone)]
-pub struct StorageManager<D: StorageDatabase> {
+pub struct StorageManager<D: StorageDatabase = SqliteStorageDatabase> {
     db: D,
     dir: PathBuf,
 }
@@ -103,15 +105,7 @@ impl<D: StorageDatabaseExt> StorageManager<D> {
     }
 }
 
-// TODO: error handling - remove unwrap()
-
-#[cfg(feature = "sqlite")]
-use crate::sqlite::{error::DatabaseError, run_migrations, SqliteStorageDatabase};
-#[cfg(feature = "sqlite")]
-use std::path::Path;
-
-#[cfg(feature = "sqlite")]
-impl StorageManager<SqliteStorageDatabase> {
+impl StorageManager {
     /// Initialize new storage manager with SQLite database.
     ///
     /// If the storage doesn't exist yet, it will be created.
@@ -127,3 +121,5 @@ impl StorageManager<SqliteStorageDatabase> {
         Ok(Self { db, dir })
     }
 }
+
+// TODO: error handling - remove unwrap()

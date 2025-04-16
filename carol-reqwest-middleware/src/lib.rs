@@ -9,12 +9,10 @@ use reqwest_middleware::{Middleware, Next};
 use serde::Serialize;
 
 #[doc(no_inline)]
-pub use storage;
+pub use carol as storage;
 
-use storage::database::StorageDatabaseExt;
-use storage::file::StorePolicy;
-use storage::sqlite::SqliteStorageDatabase;
-use storage::storage_manager::StorageManager;
+use carol::sqlite::SqliteStorageDatabase;
+use carol::{StorageDatabaseExt, StorageManager, StorePolicy};
 
 pub struct CarolMiddleware<D: StorageDatabaseExt = SqliteStorageDatabase> {
     pub storage_manager: StorageManager<D>,
@@ -82,11 +80,10 @@ fn get_filename(response: &Response) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::CarolMiddleware;
+    use carol::{FileMetadata, StorageManager, StorePolicy};
     use http_test_server::TestServer;
     use rstest::{fixture, rstest};
     use std::time::Duration;
-    use storage::file::{FileMetadata, StorePolicy};
-    use storage::storage_manager::StorageManager;
     use tokio::fs;
 
     const DEFAULT_PATH: &str = "/hello.txt";

@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "storage",
+    "carol",
     "carol-reqwest-middleware",
-    # "carol",
 ]

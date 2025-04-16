@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 /// File identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct FileId(i32);
 

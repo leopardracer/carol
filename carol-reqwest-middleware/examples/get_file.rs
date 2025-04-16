@@ -1,7 +1,6 @@
 use std::time::Duration;
 
-use carol_reqwest_middleware::storage::file::{FileMetadata, StorePolicy};
-use carol_reqwest_middleware::storage::storage_manager::StorageManager;
+use carol_reqwest_middleware::storage::{FileMetadata, StorageManager, StorePolicy};
 use carol_reqwest_middleware::CarolMiddleware;
 
 const DATABASE_URL: &str = "get-file.carol.sqlite";

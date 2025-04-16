@@ -119,10 +119,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 
 [[package]]
+name = "carol"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "chrono",
+ "diesel",
+ "diesel-async",
+ "diesel_migrations",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "sha256",
+ "thiserror 2.0.12",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "carol-reqwest-middleware"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "carol",
  "content_disposition",
  "http",
  "http-test-server",
@@ -131,7 +152,6 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
- "storage",
  "tempfile",
  "tokio",
 ]
@@ -1550,26 +1570,6 @@ name = "stable_deref_trait"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
-
-[[package]]
-name = "storage"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "bytes",
- "chrono",
- "diesel",
- "diesel-async",
- "diesel_migrations",
- "futures-util",
- "serde",
- "serde_json",
- "sha256",
- "thiserror 2.0.12",
- "tokio",
- "tracing",
- "url",
-]
 
 [[package]]
 name = "strsim"
