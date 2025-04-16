@@ -353,7 +353,7 @@ mod tests {
         #[future]
         #[from(database_with_single_entry)]
         #[with(NewFile {
-            status: FileStatus::ToRemove.into(),
+            status: FileStatus::ToRemove,
             ..SqliteDatabaseFixture::default_new_entry()
         })]
         fixture: (SqliteDatabaseFixture, File),

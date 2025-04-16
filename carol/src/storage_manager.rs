@@ -1,3 +1,4 @@
+use std::error::Error as StdError;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -9,10 +10,9 @@ use tokio::io::AsyncWriteExt;
 use tokio::time;
 
 use crate::database::{StorageDatabase, StorageDatabaseError, StorageDatabaseExt};
-use crate::sqlite::error::DatabaseError;
-use crate::sqlite::{run_migrations, SqliteStorageDatabase};
-
-use super::file::{File, FileMetadata, FileSource, FileStatus, StorePolicy};
+use crate::error::StorageError;
+use crate::file::{File, FileMetadata, FileSource, FileStatus, StorePolicy};
+use crate::sqlite::{self, run_migrations, SqliteStorageDatabase};
 
 #[derive(Clone)]
 pub struct StorageManager<D: StorageDatabase = SqliteStorageDatabase> {
@@ -27,10 +27,10 @@ impl<D: StorageDatabaseExt> StorageManager<D> {
         store_policy: StorePolicy,
         filename: Option<String>,
         mut stream: S,
-    ) -> Result<File, ()>
+    ) -> Result<File, StorageError<D::Error>>
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin,
-        E: std::error::Error,
+        E: StdError + 'static + Send + Sync,
     {
         let path = self.path_from_source(&source);
         let now = Utc::now();
@@ -45,32 +45,33 @@ impl<D: StorageDatabaseExt> StorageManager<D> {
 
         match self.db.store(metadata).await {
             Ok(id) => {
-                let mut run = async || -> Result<File, ()> {
-                    let mut output = fs::File::create_new(&path).await.unwrap();
+                let mut run = async || -> Result<File, StorageError<D::Error>> {
+                    let mut output = fs::File::create_new(&path).await?;
                     while let Some(chunk_result) = stream.next().await {
-                        let chunk = chunk_result.unwrap();
-                        output.write_all(&chunk).await.unwrap();
+                        let chunk = chunk_result.map_err(StorageError::custom)?;
+                        output.write_all(&chunk).await?;
                     }
-                    let file = self.db.update_status(id, FileStatus::Ready).await.unwrap();
+                    let file = self.db.update_status(id, FileStatus::Ready).await?;
                     Ok(file)
                 };
 
-                let revert = async || {
-                    fs::remove_file(&path).await.unwrap();
-                    self.db.remove(id).await.unwrap();
+                let revert = async || -> Result<(), StorageError<D::Error>> {
+                    fs::remove_file(&path).await?;
+                    self.db.remove(id).await?;
+                    Ok(())
                 };
 
                 match run().await {
                     Ok(file) => Ok(file),
                     Err(err) => {
-                        revert().await;
+                        revert().await?;
                         Err(err)
                     }
                 }
             }
             Err(err) if err.is_unique_violation() => {
                 let file = loop {
-                    match self.find_by_source(&source).await {
+                    match self.find_by_source(&source).await? {
                         Some(file) if file.status == FileStatus::Ready => {
                             break file;
                         }
@@ -88,12 +89,15 @@ impl<D: StorageDatabaseExt> StorageManager<D> {
         }
     }
 
-    pub async fn find_by_source(&self, source: &FileSource) -> Option<File> {
-        let files = self.db.select_by_source(source).await.unwrap();
+    pub async fn find_by_source(
+        &self,
+        source: &FileSource,
+    ) -> Result<Option<File>, StorageError<D::Error>> {
+        let files = self.db.select_by_source(source).await?;
         // Because of the way self.path_from_source() works, sources
         // are also expected to be unique.
         debug_assert!(files.len() <= 1);
-        files.into_iter().next()
+        Ok(files.into_iter().next())
     }
 
     /// Generate cached file path from [`FileSource`].
@@ -113,13 +117,11 @@ impl StorageManager {
         database_url: impl AsRef<str>,
         dir: impl AsRef<Path>,
         max_size: Option<usize>,
-    ) -> Result<Self, DatabaseError> {
-        let dir = std::path::absolute(dir.as_ref()).unwrap();
-        fs::create_dir_all(&dir).await.unwrap();
+    ) -> Result<Self, StorageError<sqlite::error::DatabaseError>> {
+        let dir = std::path::absolute(dir.as_ref())?;
+        fs::create_dir_all(&dir).await?;
         run_migrations(database_url.as_ref()).await?;
         let db = SqliteStorageDatabase::connect_pool(database_url.as_ref(), max_size).await?;
         Ok(Self { db, dir })
     }
 }
-
-// TODO: error handling - remove unwrap()

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 
 use crate::file::{File, FileId, FileMetadata, FileSource, FileStatus};
 
-pub trait StorageDatabaseError: std::error::Error + Send {
+pub trait StorageDatabaseError: std::error::Error + Send + Sync {
     fn is_unique_violation(&self) -> bool;
     fn is_not_found(&self) -> bool;
 }

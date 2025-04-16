@@ -244,14 +244,14 @@ mod tests {
         )]
         input: &str,
     ) {
-        let source = FileSource::parse(input.as_ref());
+        let source = FileSource::parse(input);
         assert!(matches!(source, FileSource::Url(..)));
     }
 
     #[rstest]
     #[trace]
     fn test_file_source_custom(#[values("some.source", "/path/to/local", "")] input: &str) {
-        let source = FileSource::parse(input.as_ref());
+        let source = FileSource::parse(input);
         assert!(matches!(source, FileSource::Custom(..)));
     }
 
@@ -261,7 +261,7 @@ mod tests {
     #[case("https://example.com/file", "https://example.com/file")]
     #[trace]
     fn test_file_source_as_str(#[case] input: &str, #[case] expected: &str) {
-        let source = FileSource::parse(input.as_ref());
+        let source = FileSource::parse(input);
         assert_eq!(source.as_str(), expected);
     }
 
