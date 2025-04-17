@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
-members = [
-    "carol",
-    "carol-reqwest-middleware",
-]
+members = ["carol", "carol-reqwest-middleware"]
+
+package.authors = ["Gevulot Team"]
+package.repository = "https://github.com/gevulotnetwork/carol"
+package.license = "MIT OR Apache-2.0"
