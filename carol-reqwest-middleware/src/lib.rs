@@ -118,6 +118,7 @@ mod tests {
         let database_path = temp.path().join("carol.sqlite");
         let database_url = database_path.to_str().unwrap();
         let cache_dir = temp.path().join("files");
+        fs::create_dir(&cache_dir).await.unwrap();
         let url = format!("http://localhost:{}/hello.txt", test_server.port());
 
         let storage_manager = StorageManager::init(database_url, &cache_dir, None)

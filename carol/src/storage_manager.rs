@@ -13,14 +13,28 @@ use crate::database::{StorageDatabase, StorageDatabaseError, StorageDatabaseExt}
 use crate::error::StorageError;
 use crate::file::{File, FileMetadata, FileSource, FileStatus, StorePolicy};
 use crate::sqlite::{self, run_migrations, SqliteStorageDatabase};
+use crate::storage_config::StorageConfig;
 
-#[derive(Clone)]
+/// Storage manager. This is an adapter to interact with Carol storage.
+#[derive(Clone, Debug)]
 pub struct StorageManager<D: StorageDatabase = SqliteStorageDatabase> {
     db: D,
     dir: PathBuf,
+    config: StorageConfig,
+}
+
+impl<D: StorageDatabase> StorageManager<D> {
+    /// Returns reference to config of this storage.
+    pub fn config(&self) -> &StorageConfig {
+        &self.config
+    }
 }
 
 impl<D: StorageDatabaseExt> StorageManager<D> {
+    /// Add new file to storage. Content of the file is read from `stream`.
+    ///
+    /// "Create" and "last used" timestamps of the file will be set to `Utc::now()`.
+    /// File path is defined by [`Self::path_from_source`].
     pub async fn add_file_from_stream<S, E>(
         &self,
         source: FileSource,
@@ -46,6 +60,7 @@ impl<D: StorageDatabaseExt> StorageManager<D> {
         match self.db.store(metadata).await {
             Ok(id) => {
                 let mut run = async || -> Result<File, StorageError<D::Error>> {
+                    // TODO: catch "no space left" error and evict something from storage
                     let mut output = fs::File::create_new(&path).await?;
                     while let Some(chunk_result) = stream.next().await {
                         let chunk = chunk_result.map_err(StorageError::custom)?;
@@ -83,12 +98,14 @@ impl<D: StorageDatabaseExt> StorageManager<D> {
                         }
                     }
                 };
+                // TODO: check that file is not stale
                 Ok(file)
             }
             Err(err) => panic!("{:?}", err),
         }
     }
 
+    /// Find file in storage by its source.
     pub async fn find_by_source(
         &self,
         source: &FileSource,
@@ -112,17 +129,48 @@ impl<D: StorageDatabaseExt> StorageManager<D> {
 impl StorageManager {
     /// Initialize new storage manager with SQLite database.
     ///
-    /// If the storage doesn't exist yet, it will be created.
+    /// If the storage database doesn't exist yet, it will be created.
+    ///
+    /// # Arguments
+    ///
+    /// - `database_url` - URL of SQLite database to use. Typically this is just a path,
+    ///   e.g. `/path/to/db.sqlite`.
+    /// - `dir` - path to storage directory, where the actual files will reside.
+    ///   This **must be** an absolute path. This directory **must** exist.
+    /// - `pool_size` - size of the database connection pool. If `None`, defaults to `cpu_count * 4`.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - `dir` is not absolute
+    /// - `dir` does not exists or is not a directory
+    /// - connection to database failed
+    /// - running migrations on the database failed
     pub async fn init(
         database_url: impl AsRef<str>,
         dir: impl AsRef<Path>,
-        max_size: Option<usize>,
+        pool_size: Option<usize>,
     ) -> Result<Self, StorageError<sqlite::error::DatabaseError>> {
-        let dir = std::path::absolute(dir.as_ref())?;
-        fs::create_dir_all(&dir).await?;
+        Self::init_with_config(database_url, dir, pool_size, StorageConfig::default()).await
+    }
+
+    /// Provide custom storage configuration. See [`Self::init`] for more info.
+    pub async fn init_with_config(
+        database_url: impl AsRef<str>,
+        dir: impl AsRef<Path>,
+        pool_size: Option<usize>,
+        config: StorageConfig,
+    ) -> Result<Self, StorageError<sqlite::error::DatabaseError>> {
+        if !dir.as_ref().is_absolute() {
+            return Err(StorageError::StorageDirectoryPathIsNotAbsolute);
+        }
+        if !dir.as_ref().is_dir() {
+            return Err(StorageError::StorageDirectoryDoesNotExist);
+        }
+        let dir = dir.as_ref().to_path_buf();
         run_migrations(database_url.as_ref()).await?;
-        let db = SqliteStorageDatabase::connect_pool(database_url.as_ref(), max_size).await?;
-        Ok(Self { db, dir })
+        let db = SqliteStorageDatabase::connect_pool(database_url.as_ref(), pool_size).await?;
+        Ok(Self { db, dir, config })
     }
 }
 
@@ -199,6 +247,7 @@ mod tests {
         let manager = StorageManager::<MockStorageDatabaseExt> {
             db: mock,
             dir: tmp.path().to_path_buf(),
+            config: Default::default(),
         };
 
         let file = manager

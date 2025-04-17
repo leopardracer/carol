@@ -73,7 +73,7 @@ jobs:
           default: true
       - name: Use Rust cache
         uses: Swatinem/rust-cache@v2
-      - name: Run build check
+      - name: Build docs
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --no-deps

@@ -32,6 +32,12 @@ pub enum StorageError<E: StorageDatabaseError> {
 
     #[error(transparent)]
     CustomError(Box<dyn StdError + Send + 'static>),
+
+    #[error("storage directory does not exist")]
+    StorageDirectoryDoesNotExist,
+
+    #[error("storage directory path is not absolute")]
+    StorageDirectoryPathIsNotAbsolute,
 }
 
 impl<E: StorageDatabaseError> StorageError<E> {
