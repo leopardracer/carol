@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use carol_reqwest_middleware::storage::{FileMetadata, StorageManager, StorePolicy};
+use carol_reqwest_middleware::storage::{File, StorageManager, StorePolicy};
 use carol_reqwest_middleware::CarolMiddleware;
 
 const DATABASE_URL: &str = "get-file.carol.sqlite";
@@ -25,10 +25,7 @@ async fn main() {
         .build();
 
     let response = client.get(&url).send().await.expect("get URL");
-    let file = response
-        .json::<FileMetadata>()
-        .await
-        .expect("deserialize response");
+    let file = response.json::<File>().await.expect("deserialize response");
 
     println!("{:#?}", file);
 }

@@ -209,7 +209,7 @@ impl FileMetadata {
 }
 
 /// Stored file.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct File {
     /// URI of the database used to manage this file.
     pub database: String,

@@ -6,7 +6,7 @@ HTTP caching middleware for [`reqwest`][1] library. Middleware interface is prov
 ## Example
 
 ```rust
-use carol_reqwest_middleware::storage::{FileMetadata, StorageManager, StorePolicy};
+use carol_reqwest_middleware::storage::{File, StorageManager, StorePolicy};
 use carol_reqwest_middleware::CarolMiddleware;
 
 let storage_manager = StorageManager::init(database_url, cache_dir, None).await.unwrap();
@@ -20,13 +20,10 @@ let carol_middleware = CarolMiddleware {
 let reqwest_client = reqwest::Client::builder().build().unwrap();
 let client = reqwest_middleware::ClientBuilder::new(reqwest_client).with(carol_middleware).build();
 let response = client.get("https://example.com").send().await.unwrap();
-let file = response
-    .json::<FileMetadata>()
-    .await
-    .unwrap();
+let file = response.json::<File>().await.unwrap();
 
-// Downloaded file is stored at 'file.path'
-let content = std::fs::read(&file.path);
+// Downloaded file is stored at 'file.metadata.path'
+let content = std::fs::read(&file.metadata.path);
 ```
 
 [1]: <https://crates.io/crates/reqwest>

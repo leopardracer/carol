@@ -4,7 +4,7 @@
 //!
 //! ```rust
 //! # async fn test(cache_dir: &str, database_url: &str) {
-//! use carol_reqwest_middleware::storage::{FileMetadata, StorageManager, StorePolicy};
+//! use carol_reqwest_middleware::storage::{File, StorageManager, StorePolicy};
 //! use carol_reqwest_middleware::CarolMiddleware;
 //!
 //! let storage_manager = StorageManager::init(database_url, cache_dir, None).await.unwrap();
@@ -18,12 +18,10 @@
 //! let reqwest_client = reqwest::Client::builder().build().unwrap();
 //! let client = reqwest_middleware::ClientBuilder::new(reqwest_client).with(carol_middleware).build();
 //! let response = client.get("https://example.com").send().await.unwrap();
-//! let file = response
-//!     .json::<FileMetadata>()
-//!     .await
-//!     .unwrap();
-//! // Downloaded file is stored at 'file.path'
-//! let content = std::fs::read(&file.path);
+//! let file = response.json::<File>().await.unwrap();
+//!
+//! // Downloaded file is stored at 'file.metadata.path'
+//! let content = std::fs::read(&file.metadata.path);
 //! # }
 //! ```
 
@@ -81,7 +79,7 @@ where
             .await
             .unwrap();
 
-        let body = Body::from(serde_json::to_string(&file.metadata).unwrap());
+        let body = Body::from(serde_json::to_string(&file).unwrap());
         let response = Response::from(builder.body(body).unwrap());
         Ok(response)
     }
@@ -109,7 +107,7 @@ fn get_filename(response: &Response) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::CarolMiddleware;
-    use carol::{FileMetadata, StorageManager, StorePolicy};
+    use carol::{File, StorageManager, StorePolicy};
     use http_test_server::TestServer;
     use rstest::{fixture, rstest};
     use std::time::Duration;
@@ -164,13 +162,10 @@ mod tests {
             .build();
 
         let response = client.get(&url).send().await.expect("get URL");
-        let file = response
-            .json::<FileMetadata>()
-            .await
-            .expect("deserialize response");
-        assert_eq!(file.filename, Some("hello.txt".to_string()));
-        assert_eq!(file.source.as_str(), &url);
-        let content = fs::read_to_string(&file.path)
+        let file = response.json::<File>().await.expect("deserialize response");
+        assert_eq!(file.metadata.filename, Some("hello.txt".to_string()));
+        assert_eq!(file.metadata.source.as_str(), &url);
+        let content = fs::read_to_string(&file.metadata.path)
             .await
             .expect("read file content");
         assert_eq!(&content, DEFAULT_CONTENT);
