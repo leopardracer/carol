@@ -1,10 +1,10 @@
-//! Carol files storage.
+//! # Carol files storage
 //!
 //! This library implements an asynchronous managed storage of files in the filesystem. Storage
 //! files directory is paired with a database, which holds files additional metadata. It works with
 //! any filesystem supported by Rust and currently backed by serverless SQLite database.
 //!
-//! # How it works
+//! ## How it works
 //!
 //! Carol storage consists of two parts:
 //!
@@ -15,7 +15,7 @@
 //! To interact with storage use [`StorageManager`] instance. Before initializing a manager, create
 //! storage directory first. Manager **will not** do this.
 //!
-//! # Example
+//! ## Example
 //!
 //! ```rust
 //! # tokio_test::block_on(async {

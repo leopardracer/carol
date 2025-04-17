@@ -1,12 +1,17 @@
-# Cache Roller (CAROL)
+# Carol
 
-Asyncronous caching engine for fetching files over HTTP(-S).
-Designed to avoid copying huge files. This is **not** a HTTP proxy.
+Asynchronous managed storage of files in the filesystem. Designed to manage a set of huge files.
 
-The main idea of Carol is to store downloaded files in the filesystem,
-tracking and managing their state through cache database.
+The main idea of Carol is to pair files stored in a filesystem directory with a database holding
+additional metadata and providing synchronization.
 
-Repository contains `carol` Rust library and `carol` CLI tool.
+Source tracking and storage eviction features allows to use Carol as a **cache backend** when
+fetching huge files from the network (see [`carol-reqwest-middleware`][1]).
+
+This repository contains:
+
+- `carol` - main library crate
+- `carol-reqwest-middleware` - HTTP caching middleware for [`reqwest`][2] library
 
 Find out more from docs:
 
@@ -14,56 +19,38 @@ Find out more from docs:
 cargo doc --open
 ```
 
-See also `examples/` directory.
-
 ## API example
 
 ```rust
-use carol::Client;
+use carol::{FileSource, StorageManager, StorePolicy};
 
-// Initialize client
-let mut client = Client::init(database, cache_dir).await.unwrap();
+let cache_dir = "/tmp/carol";
 
-// Download file or just get it if it's already downloaded
-let file = client.get(url).await.unwrap();
+// Create storage directory
+std::fs::create_dir_all(&cache_dir).unwrap();
 
-// You can access downloaded file directly from cache directory
-let full_path = file.cache_path();
+// Initialize storage manager
+let manager = StorageManager::init("carol.sqlite", &cache_dir, None).await.unwrap();
 
-// Alternatively create symlink to downloaded file,
-// so it can be accessed at a different path
-file.symlink(target).await.unwrap();
+// Copy some local file into storage
+std::fs::write("myfile", "hello world").unwrap();
 
-// use file however you need
-// ...
-
-// "Free" file so it can be removed from cache later
-file.release().await.unwrap();
-```
-
-## CLI example
-
-This downloads file into cache directory and creates symlink `./example` pointing to the result.
-
-```plaintext
-$ carol get https://example.com example
-example
-$ cat example
-<!doctype html>
-<html>
-<head>
-...
-$ readlink example 
-/home/user/.cache/carol/files/100680ad546ce6a577f42f52df33b4cfdca756859e664b8d7de329b150d09ce9
+let file = manager
+    .copy_local_file(
+        FileSource::parse("./myfile"),
+        StorePolicy::StoreForever,
+        Some("myfile".to_string()),
+        "myfile",
+    )
+    .await
+    .unwrap();
 ```
 
 ## Roadmap
 
-- [x] Retry policies for client
-- [ ] Maintainers
-- [ ] Timeouts for different operations
-- [ ] Add more scenarios to integration tests
-- [x] Client configuration options (possibly ClientBuilder)
-- [x] Update (re-download) file feature
-- [ ] Refine logging
-- [ ] Add "Last used" timestamp to file meta
+- [ ] Proper storage eviction
+- [ ] Advisory locks for stored files
+- [ ] CLI interface for storage manager
+
+[1]: <https://github.com/gevulotnetwork/carol/tree/main/carol-reqwest-middleware>
+[2]: <https://crates.io/crates/reqwest>
