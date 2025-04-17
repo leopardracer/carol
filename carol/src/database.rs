@@ -32,3 +32,70 @@ pub trait StorageDatabaseExt: StorageDatabase {
     async fn select_by_source(&self, source: &FileSource) -> Result<Vec<File>, Self::Error>;
     async fn update_status(&self, id: FileId, new_status: FileStatus) -> Result<File, Self::Error>;
 }
+
+#[cfg(test)]
+pub mod mocks {
+    use super::*;
+    use mockall::mock;
+
+    mock! {
+        #[derive(Debug)]
+        pub StorageDatabaseError {}
+
+        impl std::fmt::Display for StorageDatabaseError {
+            #[concretize]
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error>;
+        }
+
+        impl std::error::Error for StorageDatabaseError {}
+
+        impl StorageDatabaseError for StorageDatabaseError {
+            fn is_unique_violation(&self) -> bool;
+            fn is_not_found(&self) -> bool;
+        }
+    }
+
+    mock! {
+        pub StorageDatabase {}
+
+        impl Clone for StorageDatabase {
+            fn clone(&self) -> Self;
+        }
+
+        #[async_trait]
+        impl StorageDatabase for StorageDatabase {
+            type Uri=String;
+            type Error=MockStorageDatabaseError;
+
+            fn uri(&self) -> String;
+            async fn store(&self, metadata: FileMetadata) -> Result<FileId, MockStorageDatabaseError>;
+            async fn get(&self, id: FileId) -> Result<File, MockStorageDatabaseError>;
+            async fn remove(&self, id: FileId) -> Result<(), MockStorageDatabaseError>;
+        }
+    }
+
+    mock! {
+        pub StorageDatabaseExt {}
+
+        impl Clone for StorageDatabaseExt {
+            fn clone(&self) -> Self;
+        }
+
+        #[async_trait]
+        impl StorageDatabase for StorageDatabaseExt {
+            type Uri=String;
+            type Error=MockStorageDatabaseError;
+
+            fn uri(&self) -> String;
+            async fn store(&self, metadata: FileMetadata) -> Result<FileId, MockStorageDatabaseError>;
+            async fn get(&self, id: FileId) -> Result<File, MockStorageDatabaseError>;
+            async fn remove(&self, id: FileId) -> Result<(), MockStorageDatabaseError>;
+        }
+
+        #[async_trait]
+        impl StorageDatabaseExt for StorageDatabaseExt {
+            async fn select_by_source(&self, source: &FileSource) -> Result<Vec<File>, MockStorageDatabaseError>;
+            async fn update_status(&self, id: FileId, new_status: FileStatus) -> Result<File, MockStorageDatabaseError>;
+        }
+    }
+}

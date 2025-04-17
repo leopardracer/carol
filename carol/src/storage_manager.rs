@@ -125,3 +125,97 @@ impl StorageManager {
         Ok(Self { db, dir })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::StorageManager;
+    use crate::database::mocks::MockStorageDatabaseExt;
+    use crate::file::{File, FileId, FileMetadata, FileSource, FileStatus, StorePolicy};
+    use bytes::Bytes;
+    use chrono::Utc;
+    use tokio::fs;
+
+    #[derive(Debug)]
+    struct TestError;
+
+    impl std::fmt::Display for TestError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{:?}", self)
+        }
+    }
+
+    impl std::error::Error for TestError {}
+
+    #[tokio::test]
+    async fn test_add_file_from_stream() {
+        // Set up initial data
+        let database_url = "someurl".to_string();
+        let tmp = tempfile::tempdir().unwrap();
+        let source = FileSource::Custom("somesource".to_string());
+        let store_policy = StorePolicy::StoreForever;
+        let data: Vec<Result<Bytes, TestError>> =
+            vec![Ok(Bytes::from("hello ")), Ok(Bytes::from("world"))];
+        let stream = futures_util::stream::iter(data);
+        let filename = None;
+        let path = tmp
+            .path()
+            .join("6f87d01289b1845908a7c7ccd578fddbbcefd29f6144bbab658baa9f6aae2809");
+
+        // Set up database mock
+        let mut mock = MockStorageDatabaseExt::new();
+        let file_id = FileId::from(1i32);
+        let metadata = FileMetadata {
+            source: source.clone(),
+            filename: filename.clone(),
+            path: path.clone(),
+            store_policy,
+            created: Utc::now(),
+            last_used: Utc::now(),
+        };
+
+        let metadata_clone = metadata.clone();
+        mock.expect_store()
+            .withf(move |metadata| {
+                metadata.filename == metadata_clone.filename
+                    && metadata.path == metadata_clone.path
+                    && metadata.source == metadata_clone.source
+                    && metadata.store_policy == store_policy
+            })
+            .return_once(move |_| Ok(file_id));
+
+        let database_url_clone = database_url.clone();
+        mock.expect_update_status()
+            .withf(move |id, new_status| *id == file_id && *new_status == FileStatus::Ready)
+            .return_once(move |id, status| {
+                Ok(File {
+                    database: database_url_clone,
+                    id,
+                    status,
+                    metadata,
+                })
+            });
+
+        // Create manager
+        let manager = StorageManager::<MockStorageDatabaseExt> {
+            db: mock,
+            dir: tmp.path().to_path_buf(),
+        };
+
+        let file = manager
+            .add_file_from_stream(source.clone(), store_policy, filename.clone(), stream)
+            .await
+            .expect("add file from stream");
+
+        assert_eq!(file.database, database_url);
+        assert_eq!(file.id, file_id);
+        assert_eq!(file.status, FileStatus::Ready);
+        assert_eq!(file.metadata.filename, filename);
+        assert_eq!(file.metadata.path, path);
+        assert_eq!(file.metadata.source, source);
+        assert_eq!(file.metadata.store_policy, store_policy);
+        let content = fs::read_to_string(&file.metadata.path)
+            .await
+            .expect("read content");
+        assert_eq!(content.as_str(), "hello world");
+    }
+}
