@@ -2,12 +2,13 @@ use std::error::Error as StdError;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use chrono::Utc;
 use futures_util::{Stream, StreamExt};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::time;
+use tokio_util::codec::{BytesCodec, FramedRead};
 
 use crate::database::{StorageDatabase, StorageDatabaseError, StorageDatabaseExt};
 use crate::error::StorageError;
@@ -27,6 +28,14 @@ impl<D: StorageDatabase> StorageManager<D> {
     /// Returns reference to config of this storage.
     pub fn config(&self) -> &StorageConfig {
         &self.config
+    }
+
+    /// Generate cached file path from [`FileSource`].
+    ///
+    /// Applies SHA256 to `source` string representation
+    /// to generate the file name in cache directory.
+    pub fn path_from_source(&self, source: &FileSource) -> PathBuf {
+        self.dir.join(sha256::digest(source))
     }
 }
 
@@ -105,6 +114,28 @@ impl<D: StorageDatabaseExt> StorageManager<D> {
         }
     }
 
+    /// Add new file to storage by **copying** it from local path.
+    ///
+    /// "Create" and "last used" timestamps of the file will be set to `Utc::now()`.
+    /// File path is defined by [`Self::path_from_source`].
+    ///
+    /// **Note:** if you are using local path as `source`, keep in mind that sources are unique in
+    /// the storage. Because of that the same call for a modified local file **will not update** the
+    /// file in the storage.
+    pub async fn copy_local_file(
+        &self,
+        source: FileSource,
+        store_policy: StorePolicy,
+        filename: Option<String>,
+        path: impl AsRef<Path>,
+    ) -> Result<File, StorageError<D::Error>> {
+        let file = fs::File::open(path.as_ref()).await?;
+        let stream =
+            FramedRead::new(file, BytesCodec::new()).map(|item| item.map(BytesMut::freeze));
+        self.add_file_from_stream(source, store_policy, filename, stream)
+            .await
+    }
+
     /// Find file in storage by its source.
     pub async fn find_by_source(
         &self,
@@ -115,14 +146,6 @@ impl<D: StorageDatabaseExt> StorageManager<D> {
         // are also expected to be unique.
         debug_assert!(files.len() <= 1);
         Ok(files.into_iter().next())
-    }
-
-    /// Generate cached file path from [`FileSource`].
-    ///
-    /// Applies SHA256 to `source` string representation
-    /// to generate the file name in cache directory.
-    pub fn path_from_source(&self, source: &FileSource) -> PathBuf {
-        self.dir.join(sha256::digest(source))
     }
 }
 
@@ -254,6 +277,86 @@ mod tests {
             .add_file_from_stream(source.clone(), store_policy, filename.clone(), stream)
             .await
             .expect("add file from stream");
+
+        assert_eq!(file.database, database_url);
+        assert_eq!(file.id, file_id);
+        assert_eq!(file.status, FileStatus::Ready);
+        assert_eq!(file.metadata.filename, filename);
+        assert_eq!(file.metadata.path, path);
+        assert_eq!(file.metadata.source, source);
+        assert_eq!(file.metadata.store_policy, store_policy);
+        let content = fs::read_to_string(&file.metadata.path)
+            .await
+            .expect("read content");
+        assert_eq!(content.as_str(), "hello world");
+    }
+
+    #[tokio::test]
+    async fn test_copy_local_file() {
+        // Set up initial data
+        let localtmp = tempfile::tempdir().unwrap();
+        let localfile_path = localtmp.path().join("localfile");
+        fs::write(&localfile_path, "hello world").await.unwrap();
+
+        let database_url = "someurl".to_string();
+        let tmp = tempfile::tempdir().unwrap();
+        let source = FileSource::Custom("somesource".to_string());
+        let store_policy = StorePolicy::StoreForever;
+        let filename = None;
+        let path = tmp
+            .path()
+            .join("6f87d01289b1845908a7c7ccd578fddbbcefd29f6144bbab658baa9f6aae2809");
+
+        // Set up database mock
+        let mut mock = MockStorageDatabaseExt::new();
+        let file_id = FileId::from(1i32);
+        let metadata = FileMetadata {
+            source: source.clone(),
+            filename: filename.clone(),
+            path: path.clone(),
+            store_policy,
+            created: Utc::now(),
+            last_used: Utc::now(),
+        };
+
+        let metadata_clone = metadata.clone();
+        mock.expect_store()
+            .withf(move |metadata| {
+                metadata.filename == metadata_clone.filename
+                    && metadata.path == metadata_clone.path
+                    && metadata.source == metadata_clone.source
+                    && metadata.store_policy == store_policy
+            })
+            .return_once(move |_| Ok(file_id));
+
+        let database_url_clone = database_url.clone();
+        mock.expect_update_status()
+            .withf(move |id, new_status| *id == file_id && *new_status == FileStatus::Ready)
+            .return_once(move |id, status| {
+                Ok(File {
+                    database: database_url_clone,
+                    id,
+                    status,
+                    metadata,
+                })
+            });
+
+        // Create manager
+        let manager = StorageManager::<MockStorageDatabaseExt> {
+            db: mock,
+            dir: tmp.path().to_path_buf(),
+            config: Default::default(),
+        };
+
+        let file = manager
+            .copy_local_file(
+                source.clone(),
+                store_policy,
+                filename.clone(),
+                &localfile_path,
+            )
+            .await
+            .expect("copy local file");
 
         assert_eq!(file.database, database_url);
         assert_eq!(file.id, file_id);

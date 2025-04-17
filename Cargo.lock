@@ -144,6 +144,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.12",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-test",
  "url",
